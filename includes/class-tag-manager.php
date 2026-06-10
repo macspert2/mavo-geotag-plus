@@ -190,8 +190,8 @@ class TagManager {
         string $country_code,
         array  &$summary
     ): ?int {
-        $term_id = $this->find_term_by_name_and_lang($name, $lang)
-                ?? $this->find_term_by_normalised_name($name, $lang);
+        $term_id = $this->find_term_by_name_and_lang($name, $lang, $level)
+                ?? $this->find_term_by_normalised_name($name, $lang, $level);
 
         if (!$term_id) {
             $term_id = $this->create_term($name, $lang, $level, $country_code, $summary);
@@ -200,12 +200,16 @@ class TagManager {
         return $term_id;
     }
 
-    private function find_term_by_name_and_lang(string $name, string $lang): ?int {
+    private function find_term_by_name_and_lang(string $name, string $lang, string $level): ?int {
         $terms = get_terms([
             'taxonomy'   => 'post_tag',
             'name'       => $name,
             'hide_empty' => false,
             'fields'     => 'ids',
+            'meta_query' => [[
+                'key'   => 'geo_tagger_level',
+                'value' => $level,
+            ]],
         ]);
 
         if (is_wp_error($terms) || empty($terms)) {
@@ -221,15 +225,15 @@ class TagManager {
         return null;
     }
 
-    private function find_term_by_normalised_name(string $name, string $lang): ?int {
+    private function find_term_by_normalised_name(string $name, string $lang, string $level): ?int {
         $term_ids = get_terms([
             'taxonomy'   => 'post_tag',
             'hide_empty' => false,
             'fields'     => 'ids',
-            'meta_query' => [[
-                'key'   => 'geo_tagger_name_normalised',
-                'value' => $this->normalise($name),
-            ]],
+            'meta_query' => [
+                ['key' => 'geo_tagger_name_normalised', 'value' => $this->normalise($name)],
+                ['key' => 'geo_tagger_level',           'value' => $level],
+            ],
         ]);
 
         if (is_wp_error($term_ids) || empty($term_ids)) {
@@ -257,11 +261,32 @@ class TagManager {
 
         if (is_wp_error($result)) {
             if ($result->get_error_code() === 'term_exists') {
-                return (int) $result->get_error_data();
+                $existing_id    = (int) $result->get_error_data();
+                $existing_level = get_term_meta($existing_id, 'geo_tagger_level', true);
+
+                if ($existing_level === $level || $existing_level === '') {
+                    // Same level (or unmanaged term with no level) — genuinely the same entity.
+                    return $existing_id;
+                }
+
+                // Different level with the same name (e.g. county "Ibiza" vs city "Ibiza"):
+                // retry with a level-qualified slug to keep the two terms distinct.
+                $slug   = sanitize_title($name) . '-' . $level . '-' . $lang;
+                $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
+
+                if (is_wp_error($result)) {
+                    if ($result->get_error_code() === 'term_exists') {
+                        return (int) $result->get_error_data();
+                    }
+                    error_log('Geo Tagger: Failed to create term "' . $name . '" (' . $level . '/' . $lang . '): ' . $result->get_error_message());
+                    $summary['errors'][] = $name;
+                    return null;
+                }
+            } else {
+                error_log('Geo Tagger: Failed to create term "' . $name . '" (' . $lang . '): ' . $result->get_error_message());
+                $summary['errors'][] = $name;
+                return null;
             }
-            error_log('Geo Tagger: Failed to create term "' . $name . '" (' . $lang . '): ' . $result->get_error_message());
-            $summary['errors'][] = $name;
-            return null;
         }
 
         $term_id = (int) $result['term_id'];
