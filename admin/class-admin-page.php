@@ -173,6 +173,23 @@ class AdminPage {
                 <?php submit_button('Save Settings'); ?>
             </form>
 
+            <!-- Single Post Test -->
+            <h2>Test: Single Post</h2>
+            <p>Process one post by ID to verify tagging before running the full batch.</p>
+            <p>
+                <input type="number" id="gt-single-post-id" min="1" placeholder="Post ID"
+                       style="width:120px" class="regular-text">
+                <button type="button" id="gt-single-post-btn" class="button button-primary"
+                        style="margin-left:6px"
+                        <?php echo (!$geo_mashup_ok || !$polylang_ok) ? 'disabled' : ''; ?>>
+                    Process Post
+                </button>
+            </p>
+            <div id="gt-single-result" style="display:none;margin-top:10px;padding:10px 14px;
+                background:#fff;border:1px solid #c3c4c7;border-radius:3px;max-width:600px;
+                line-height:1.7;font-size:13px">
+            </div>
+
             <!-- Batch Processor -->
             <h2>Batch Processor</h2>
             <p>Tags all existing posts that have a Geo Mashup location. Safe to run multiple times — already-tagged posts are skipped.</p>

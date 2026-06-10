@@ -84,6 +84,62 @@ class BatchProcessor {
         wp_send_json_success(['deleted' => (int)$deleted]);
     }
 
+    public function ajax_process_single(): void {
+        check_ajax_referer('geo_tagger_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Forbidden', 403);
+        }
+
+        $post_id = absint($_POST['post_id'] ?? 0);
+        if (!$post_id) {
+            wp_send_json_error(['message' => 'Please enter a valid post ID.']);
+            return;
+        }
+
+        $post = get_post($post_id);
+        if (!$post) {
+            wp_send_json_error(['message' => "No post found with ID {$post_id}."]);
+            return;
+        }
+
+        // Provide specific feedback for each failure mode rather than a silent empty result
+        $location = $this->core->get_geo_mashup_db()->get_location_for_post($post_id);
+        if (!$location || empty($location->lat) || empty($location->lng)) {
+            wp_send_json_success([
+                'post_id' => $post_id,
+                'title'   => get_the_title($post),
+                'note'    => 'No Geo Mashup location found for this post.',
+                'added' => [], 'skipped' => [], 'errors' => [],
+            ]);
+            return;
+        }
+
+        $lang = function_exists('pll_get_post_language') ? pll_get_post_language($post_id) : null;
+        if (!$lang) {
+            wp_send_json_success([
+                'post_id'  => $post_id,
+                'title'    => get_the_title($post),
+                'location' => ['lat' => $location->lat, 'lng' => $location->lng, 'city' => $location->city ?? ''],
+                'note'     => 'No Polylang language assigned to this post.',
+                'added' => [], 'skipped' => [], 'errors' => [],
+            ]);
+            return;
+        }
+
+        $summary = $this->core->tag_single_post($post_id);
+
+        wp_send_json_success([
+            'post_id'  => $post_id,
+            'title'    => get_the_title($post),
+            'lang'     => $lang,
+            'location' => ['lat' => $location->lat, 'lng' => $location->lng, 'city' => $location->city ?? ''],
+            'note'     => null,
+            'added'    => $summary['added']   ?? [],
+            'skipped'  => $summary['skipped'] ?? [],
+            'errors'   => $summary['errors']  ?? [],
+        ]);
+    }
+
     public function ajax_test_nominatim(): void {
         check_ajax_referer('geo_tagger_nonce', 'nonce');
         if (!current_user_can('manage_options')) {

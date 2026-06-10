@@ -86,6 +86,61 @@
         }
     }
 
+    function esc(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function processSinglePost() {
+        const input  = document.getElementById('gt-single-post-id');
+        const btn    = document.getElementById('gt-single-post-btn');
+        const result = document.getElementById('gt-single-result');
+        const postId = input.value.trim();
+
+        if (!postId) { input.focus(); return; }
+
+        btn.disabled         = true;
+        result.style.display = 'block';
+        result.innerHTML     = 'Processing…';
+
+        try {
+            const d = await post('geo_tagger_process_single', { post_id: postId });
+
+            let html = '<strong>[' + d.post_id + '] ' + esc(d.title) + '</strong>';
+            if (d.lang) {
+                html += ' &nbsp;<em style="color:#666">lang: ' + esc(d.lang) + '</em>';
+            }
+            if (d.location) {
+                html += '<br>Location: ' + esc(d.location.lat) + ', ' + esc(d.location.lng);
+                if (d.location.city) html += ' &mdash; ' + esc(d.location.city);
+            }
+            if (d.note) {
+                html += '<br><span style="color:#b45309">⚠ ' + esc(d.note) + '</span>';
+            }
+            if (d.added && d.added.length) {
+                html += '<br><span style="color:#166534">＋ Added: ' + esc(d.added.join(', ')) + '</span>';
+            }
+            if (d.skipped && d.skipped.length) {
+                html += '<br><span style="color:#555">～ Already tagged: ' + esc(d.skipped.join(', ')) + '</span>';
+            }
+            if (d.errors && d.errors.length) {
+                html += '<br><span style="color:#991b1b">✗ Errors: ' + esc(d.errors.join(', ')) + '</span>';
+            }
+            if (!d.note && !d.added?.length && !d.skipped?.length && !d.errors?.length) {
+                html += '<br><span style="color:#b45309">No tags were processed.</span>';
+            }
+
+            result.innerHTML = html;
+        } catch (err) {
+            result.innerHTML = '<span style="color:#991b1b">✗ ' + esc(err.message) + '</span>';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
     async function testNominatim() {
         const btn    = document.getElementById('gt-test-nominatim');
         const result = document.getElementById('gt-nominatim-result');
@@ -104,8 +159,12 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        document.getElementById('gt-run-batch')      ?.addEventListener('click', runBatch);
-        document.getElementById('gt-clear-cache')    ?.addEventListener('click', clearCache);
-        document.getElementById('gt-test-nominatim') ?.addEventListener('click', testNominatim);
+        document.getElementById('gt-run-batch')       ?.addEventListener('click', runBatch);
+        document.getElementById('gt-clear-cache')     ?.addEventListener('click', clearCache);
+        document.getElementById('gt-test-nominatim')  ?.addEventListener('click', testNominatim);
+        document.getElementById('gt-single-post-btn') ?.addEventListener('click', processSinglePost);
+        document.getElementById('gt-single-post-id')  ?.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') processSinglePost();
+        });
     });
 }());
