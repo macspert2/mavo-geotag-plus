@@ -54,11 +54,13 @@ class NominatimClient {
 
         $user_agent = $this->settings['user_agent'] ?? ('GeoTagger/1.0 (' . home_url() . ')');
 
+        // 'user-agent' must be a top-level arg — setting it inside 'headers' is
+        // silently ignored by WordPress's HTTP API, which manages its own UA header.
         $response = wp_remote_get($url, [
-            'timeout' => 10,
-            'headers' => [
-                'User-Agent' => $user_agent,
-                'Referer'    => home_url(),
+            'timeout'    => 10,
+            'user-agent' => $user_agent,
+            'headers'    => [
+                'Referer' => home_url(),
             ],
         ]);
 
