@@ -41,6 +41,8 @@ class TagManager {
         $parent_id     = $world_id;
         $leaf_place_id = null;
 
+        error_log('GeoTagger v' . GEO_TAGGER_VERSION . ' apply_geo_tags: post=' . $post_id . ' lang=' . $post_lang . ' levels=' . implode(',', array_keys($level_map)));
+
         foreach (['continent', 'country', 'region', 'county', 'city'] as $level) {
             if (!isset($level_map[$level])) {
                 continue;
@@ -65,6 +67,9 @@ class TagManager {
                     continue;
                 }
                 $place = $this->place_repo->get_place($new_id);
+                error_log("GeoTagger [{$level}] CREATED place id=" . ($place->id ?? '?') . " names=" . json_encode($names));
+            } else {
+                error_log("GeoTagger [{$level}] FOUND place id={$place->id} term_id_fr={$place->term_id_fr} term_id_en={$place->term_id_en} term_id_de={$place->term_id_de}");
             }
 
             if (!$place) {
@@ -81,13 +86,17 @@ class TagManager {
                 $col = 'term_id_' . $lang;
                 if (empty($place->$col)) {
                     $term_id = $this->find_or_create_term($name, $lang, $level, $country_code, $summary);
+                    error_log("GeoTagger [{$level}/{$lang}] find_or_create_term('{$name}') => " . ($term_id ?? 'null'));
                     if ($term_id) {
                         $new_term_ids[$lang] = $term_id;
                     }
+                } else {
+                    error_log("GeoTagger [{$level}/{$lang}] skipped — place already has term_id=" . $place->$col);
                 }
             }
 
             if ($new_term_ids) {
+                error_log("GeoTagger [{$level}] update_term_ids place={$place->id} ids=" . json_encode($new_term_ids));
                 $this->place_repo->update_term_ids((int) $place->id, $new_term_ids);
             }
 
@@ -101,6 +110,7 @@ class TagManager {
                     $all_term_ids[$lang] = $new_term_ids[$lang];
                 }
             }
+            error_log("GeoTagger [{$level}] all_term_ids=" . json_encode($all_term_ids));
 
             // 4. Ensure all language variants are linked as Polylang translations
             if (count($all_term_ids) > 1) {
@@ -213,8 +223,10 @@ class TagManager {
         }
 
         foreach ($terms as $id) {
-            if ($this->polylang->get_term_language((int) $id) === $lang
-                && $this->resolve_term_level((int) $id) === $level) {
+            $term_lang  = $this->polylang->get_term_language((int) $id);
+            $term_level = $this->resolve_term_level((int) $id);
+            error_log("GeoTagger find_by_name '{$name}': term_id={$id} term_lang={$term_lang} resolved_level={$term_level} (want lang={$lang} level={$level})");
+            if ($term_lang === $lang && $term_level === $level) {
                 return (int) $id;
             }
         }
@@ -269,6 +281,8 @@ class TagManager {
             if ($result->get_error_code() === 'term_exists') {
                 $existing_id    = (int) $result->get_error_data();
                 $existing_level = $this->resolve_term_level($existing_id);
+
+                error_log("GeoTagger create_term '{$name}' ({$level}/{$lang}): slug '{$slug}' exists as term_id={$existing_id} resolved_level='{$existing_level}'");
 
                 if ($existing_level === $level) {
                     // Exactly the same level — genuinely the same entity, reuse it.
