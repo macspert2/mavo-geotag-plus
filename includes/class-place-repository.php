@@ -209,6 +209,7 @@ class PlaceRepository {
             $wpdb->prepare(
                 "SELECT level FROM {$wpdb->prefix}geo_tagger_places
                  WHERE term_id_fr = %d OR term_id_en = %d OR term_id_de = %d
+                 ORDER BY id ASC
                  LIMIT 1",
                 $term_id, $term_id, $term_id
             )
