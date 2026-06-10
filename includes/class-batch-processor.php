@@ -22,7 +22,7 @@ class BatchProcessor {
     }
 
     public function ajax_get_count(): void {
-        check_ajax_referer('geo_tagger_nonce');
+        check_ajax_referer('geo_tagger_nonce', 'nonce');
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Forbidden', 403);
         }
@@ -32,7 +32,7 @@ class BatchProcessor {
     }
 
     public function ajax_run_batch(): void {
-        check_ajax_referer('geo_tagger_nonce');
+        check_ajax_referer('geo_tagger_nonce', 'nonce');
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Forbidden', 403);
         }
@@ -68,7 +68,7 @@ class BatchProcessor {
     }
 
     public function ajax_clear_cache(): void {
-        check_ajax_referer('geo_tagger_nonce');
+        check_ajax_referer('geo_tagger_nonce', 'nonce');
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Forbidden', 403);
         }
@@ -84,7 +84,7 @@ class BatchProcessor {
     }
 
     public function ajax_test_nominatim(): void {
-        check_ajax_referer('geo_tagger_nonce');
+        check_ajax_referer('geo_tagger_nonce', 'nonce');
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Forbidden', 403);
         }
