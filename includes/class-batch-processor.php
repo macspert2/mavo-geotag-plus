@@ -89,13 +89,16 @@ class BatchProcessor {
             wp_send_json_error('Forbidden', 403);
         }
 
-        // Paris: known-good test coordinates
-        $result = $this->core->get_nominatim()->reverse_geocode(48.8566, 2.3522);
+        // Paris: known-good test coordinates — use probe() so we see the raw response
+        $probe = $this->core->get_nominatim()->probe(48.8566, 2.3522);
 
-        if ($result) {
-            wp_send_json_success(['message' => 'Nominatim reachable. Paris: ' . ($result['en']['address']['country'] ?? '(no country)')]);
+        if ($probe['code'] === 200) {
+            $data    = json_decode($probe['body'], true);
+            $country = $data['address']['country'] ?? '(no country in response)';
+            wp_send_json_success(['message' => "HTTP 200 — Paris resolved as: {$country}"]);
         } else {
-            wp_send_json_error(['message' => 'Nominatim request failed. Check error_log for details.']);
+            $preview = mb_substr(strip_tags($probe['body']), 0, 300);
+            wp_send_json_error(['message' => "HTTP {$probe['code']} — {$preview}"]);
         }
     }
 }

@@ -41,6 +41,38 @@ class NominatimClient {
         return $result;
     }
 
+    /**
+     * Raw connectivity probe — returns ['code' => int, 'body' => string] without caching.
+     * Used by the admin test button to surface the exact Nominatim response.
+     */
+    public function probe(float $lat, float $lng): array {
+        $url = add_query_arg([
+            'lat'            => $lat,
+            'lon'            => $lng,
+            'format'         => 'json',
+            'addressdetails' => 1,
+            'accept-language'=> 'en',
+            'zoom'           => 18,
+        ], self::ENDPOINT);
+
+        $user_agent = $this->settings['user_agent'] ?? ('GeoTagger/1.0 (' . home_url() . ')');
+
+        $response = wp_remote_get($url, [
+            'timeout'    => 10,
+            'user-agent' => $user_agent,
+            'headers'    => ['Referer' => home_url()],
+        ]);
+
+        if (is_wp_error($response)) {
+            return ['code' => 0, 'body' => $response->get_error_message()];
+        }
+
+        return [
+            'code' => (int) wp_remote_retrieve_response_code($response),
+            'body' => wp_remote_retrieve_body($response),
+        ];
+    }
+
     private function fetch(float $lat, float $lng, string $lang): ?array {
         $url = add_query_arg([
             'lat'            => $lat,
@@ -73,7 +105,8 @@ class NominatimClient {
 
         $code = wp_remote_retrieve_response_code($response);
         if ($code !== 200) {
-            error_log("Geo Tagger: Nominatim returned HTTP {$code} for lang={$lang}");
+            $body = wp_remote_retrieve_body($response);
+            error_log("Geo Tagger: Nominatim returned HTTP {$code} for lang={$lang}. Body: {$body}");
             return null;
         }
 
