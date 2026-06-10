@@ -15,10 +15,11 @@ class BatchProcessor {
     }
 
     public function init(): void {
-        add_action('wp_ajax_geo_tagger_batch_run',   [$this, 'ajax_run_batch']);
-        add_action('wp_ajax_geo_tagger_batch_count', [$this, 'ajax_get_count']);
-        add_action('wp_ajax_geo_tagger_clear_cache', [$this, 'ajax_clear_cache']);
+        add_action('wp_ajax_geo_tagger_batch_run',      [$this, 'ajax_run_batch']);
+        add_action('wp_ajax_geo_tagger_batch_count',    [$this, 'ajax_get_count']);
+        add_action('wp_ajax_geo_tagger_clear_cache',    [$this, 'ajax_clear_cache']);
         add_action('wp_ajax_geo_tagger_test_nominatim', [$this, 'ajax_test_nominatim']);
+        add_action('wp_ajax_geo_tagger_process_single', [$this, 'ajax_process_single']);
     }
 
     public function ajax_get_count(): void {
