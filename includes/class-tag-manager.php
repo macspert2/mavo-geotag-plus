@@ -264,19 +264,25 @@ class TagManager {
                 $existing_id    = (int) $result->get_error_data();
                 $existing_level = get_term_meta($existing_id, 'geo_tagger_level', true);
 
-                if ($existing_level === $level || $existing_level === '') {
-                    // Same level (or unmanaged term with no level) — genuinely the same entity.
+                if ($existing_level === $level) {
+                    // Exactly the same level — genuinely the same entity, reuse it.
                     return $existing_id;
                 }
 
-                // Different level with the same name (e.g. county "Ibiza" vs city "Ibiza"):
-                // retry with a level-qualified slug to keep the two terms distinct.
+                // Different level OR no level meta at all (term pre-dates this plugin's meta).
+                // Retry with a level-qualified slug to keep the two terms distinct.
                 $slug   = sanitize_title($name) . '-' . $level . '-' . $lang;
                 $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
 
                 if (is_wp_error($result)) {
                     if ($result->get_error_code() === 'term_exists') {
-                        return (int) $result->get_error_data();
+                        $term_id = (int) $result->get_error_data();
+                        // Repair meta if this term was created in a previous partial run.
+                        if (!get_term_meta($term_id, 'geo_tagger_level', true)) {
+                            $this->polylang->set_term_language($term_id, $lang);
+                            $this->store_term_meta($term_id, $level, $country_code, $lang, $name);
+                        }
+                        return $term_id;
                     }
                     error_log('Geo Tagger: Failed to create term "' . $name . '" (' . $level . '/' . $lang . '): ' . $result->get_error_message());
                     $summary['errors'][] = $name;
