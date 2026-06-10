@@ -92,6 +92,21 @@ class Core {
         return $this->tag_manager->apply_geo_tags($post_id, $geo_data, $lang, $hash);
     }
 
+    /**
+     * Removes the coord_index entry for a post's location so the next call to
+     * tag_single_post() takes the slow path and re-applies any missing tags.
+     * Returns false if the post has no Geo Mashup location.
+     */
+    public function clear_coord_for_post(int $post_id): bool {
+        $location = $this->geo_mashup_db->get_location_for_post($post_id);
+        if (!$location || empty($location->lat) || empty($location->lng)) {
+            return false;
+        }
+        $hash = md5((float) $location->lat . ',' . (float) $location->lng);
+        $this->place_repo->delete_coord($hash);
+        return true;
+    }
+
     public function get_geo_mashup_db(): GeoMashupDB {
         return $this->geo_mashup_db;
     }

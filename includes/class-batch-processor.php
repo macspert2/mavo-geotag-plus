@@ -126,6 +126,10 @@ class BatchProcessor {
             return;
         }
 
+        if (!empty($_POST['force'])) {
+            $this->core->clear_coord_for_post($post_id);
+        }
+
         $summary = $this->core->tag_single_post($post_id);
 
         wp_send_json_success([

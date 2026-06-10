@@ -189,4 +189,12 @@ class PlaceRepository {
             ['lat_lng_hash' => $lat_lng_hash, 'place_id' => $place_id]
         );
     }
+
+    public function delete_coord(string $lat_lng_hash): void {
+        global $wpdb;
+        $wpdb->delete(
+            "{$wpdb->prefix}geo_tagger_coord_index",
+            ['lat_lng_hash' => $lat_lng_hash]
+        );
+    }
 }

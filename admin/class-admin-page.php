@@ -184,6 +184,11 @@ class AdminPage {
                         <?php echo (!$geo_mashup_ok || !$polylang_ok) ? 'disabled' : ''; ?>>
                     Process Post
                 </button>
+                <button type="button" id="gt-single-force-btn" class="button"
+                        style="margin-left:6px"
+                        <?php echo (!$geo_mashup_ok || !$polylang_ok) ? 'disabled' : ''; ?>>
+                    Force Reprocessing
+                </button>
             </p>
             <div id="gt-single-result" style="display:none;margin-top:10px;padding:10px 14px;
                 background:#fff;border:1px solid #c3c4c7;border-radius:3px;max-width:600px;

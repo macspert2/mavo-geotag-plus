@@ -94,20 +94,24 @@
             .replace(/"/g, '&quot;');
     }
 
-    async function processSinglePost() {
-        const input  = document.getElementById('gt-single-post-id');
-        const btn    = document.getElementById('gt-single-post-btn');
-        const result = document.getElementById('gt-single-result');
-        const postId = input.value.trim();
+    async function processSinglePost(force) {
+        const input     = document.getElementById('gt-single-post-id');
+        const btn       = document.getElementById('gt-single-post-btn');
+        const forceBtn  = document.getElementById('gt-single-force-btn');
+        const result    = document.getElementById('gt-single-result');
+        const postId    = input.value.trim();
 
         if (!postId) { input.focus(); return; }
 
         btn.disabled         = true;
+        forceBtn.disabled    = true;
         result.style.display = 'block';
-        result.innerHTML     = 'Processing…';
+        result.innerHTML     = force ? 'Clearing cache and reprocessing…' : 'Processing…';
 
         try {
-            const d = await post('geo_tagger_process_single', { post_id: postId });
+            const payload = { post_id: postId };
+            if (force) payload.force = 1;
+            const d = await post('geo_tagger_process_single', payload);
 
             let html = '<strong>[' + d.post_id + '] ' + esc(d.title) + '</strong>';
             if (d.lang) {
@@ -137,7 +141,8 @@
         } catch (err) {
             result.innerHTML = '<span style="color:#991b1b">✗ ' + esc(err.message) + '</span>';
         } finally {
-            btn.disabled = false;
+            btn.disabled      = false;
+            forceBtn.disabled = false;
         }
     }
 
@@ -162,9 +167,10 @@
         document.getElementById('gt-run-batch')       ?.addEventListener('click', runBatch);
         document.getElementById('gt-clear-cache')     ?.addEventListener('click', clearCache);
         document.getElementById('gt-test-nominatim')  ?.addEventListener('click', testNominatim);
-        document.getElementById('gt-single-post-btn') ?.addEventListener('click', processSinglePost);
-        document.getElementById('gt-single-post-id')  ?.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') processSinglePost();
+        document.getElementById('gt-single-post-btn')  ?.addEventListener('click', () => processSinglePost(false));
+        document.getElementById('gt-single-force-btn') ?.addEventListener('click', () => processSinglePost(true));
+        document.getElementById('gt-single-post-id')   ?.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') processSinglePost(false);
         });
     });
 }());
