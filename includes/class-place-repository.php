@@ -197,4 +197,22 @@ class PlaceRepository {
             ['lat_lng_hash' => $lat_lng_hash]
         );
     }
+
+    /**
+     * Returns the level ('continent','country','region','county','city') stored for a term ID
+     * in our places table, or null if not found. This is the authoritative source of truth
+     * and takes precedence over geo_tagger_level term meta (which can be corrupted).
+     */
+    public function get_level_for_term_id(int $term_id): ?string {
+        global $wpdb;
+        $level = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT level FROM {$wpdb->prefix}geo_tagger_places
+                 WHERE term_id_fr = %d OR term_id_en = %d OR term_id_de = %d
+                 LIMIT 1",
+                $term_id, $term_id, $term_id
+            )
+        );
+        return $level ?: null;
+    }
 }

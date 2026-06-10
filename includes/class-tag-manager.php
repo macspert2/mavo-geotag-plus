@@ -206,10 +206,6 @@ class TagManager {
             'name'       => $name,
             'hide_empty' => false,
             'fields'     => 'ids',
-            'meta_query' => [[
-                'key'   => 'geo_tagger_level',
-                'value' => $level,
-            ]],
         ]);
 
         if (is_wp_error($terms) || empty($terms)) {
@@ -217,7 +213,8 @@ class TagManager {
         }
 
         foreach ($terms as $id) {
-            if ($this->polylang->get_term_language((int) $id) === $lang) {
+            if ($this->polylang->get_term_language((int) $id) === $lang
+                && $this->resolve_term_level((int) $id) === $level) {
                 return (int) $id;
             }
         }
@@ -232,7 +229,6 @@ class TagManager {
             'fields'     => 'ids',
             'meta_query' => [
                 ['key' => 'geo_tagger_name_normalised', 'value' => $this->normalise($name)],
-                ['key' => 'geo_tagger_level',           'value' => $level],
             ],
         ]);
 
@@ -241,12 +237,22 @@ class TagManager {
         }
 
         foreach ($term_ids as $id) {
-            if ($this->polylang->get_term_language((int) $id) === $lang) {
+            if ($this->polylang->get_term_language((int) $id) === $lang
+                && $this->resolve_term_level((int) $id) === $level) {
                 return (int) $id;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Returns the authoritative level for a term: checks the places table first
+     * (immune to corrupted term meta), then falls back to the geo_tagger_level meta.
+     */
+    private function resolve_term_level(int $term_id): string {
+        return $this->place_repo->get_level_for_term_id($term_id)
+            ?? (string) get_term_meta($term_id, 'geo_tagger_level', true);
     }
 
     private function create_term(
@@ -262,15 +268,14 @@ class TagManager {
         if (is_wp_error($result)) {
             if ($result->get_error_code() === 'term_exists') {
                 $existing_id    = (int) $result->get_error_data();
-                $existing_level = get_term_meta($existing_id, 'geo_tagger_level', true);
+                $existing_level = $this->resolve_term_level($existing_id);
 
                 if ($existing_level === $level) {
                     // Exactly the same level — genuinely the same entity, reuse it.
                     return $existing_id;
                 }
 
-                // Different level OR no level meta at all (term pre-dates this plugin's meta).
-                // Retry with a level-qualified slug to keep the two terms distinct.
+                // Different level: retry with a level-qualified slug to keep the two terms distinct.
                 $slug   = sanitize_title($name) . '-' . $level . '-' . $lang;
                 $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
 
