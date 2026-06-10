@@ -1,0 +1,192 @@
+<?php
+
+namespace GeoTagger;
+
+defined('ABSPATH') || exit;
+
+class PlaceRepository {
+
+    private ?int $world_id = null;
+
+    public static function install(): void {
+        global $wpdb;
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        $charset_collate = $wpdb->get_charset_collate();
+
+        dbDelta("CREATE TABLE {$wpdb->prefix}geo_tagger_places (
+            id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            parent_id    BIGINT UNSIGNED NULL DEFAULT NULL,
+            level        VARCHAR(20) NOT NULL,
+            name_fr      VARCHAR(255) NULL DEFAULT NULL,
+            name_en      VARCHAR(255) NULL DEFAULT NULL,
+            name_de      VARCHAR(255) NULL DEFAULT NULL,
+            term_id_fr   BIGINT UNSIGNED NULL DEFAULT NULL,
+            term_id_en   BIGINT UNSIGNED NULL DEFAULT NULL,
+            term_id_de   BIGINT UNSIGNED NULL DEFAULT NULL,
+            country_code VARCHAR(2) NULL DEFAULT NULL,
+            osm_id       BIGINT NULL DEFAULT NULL,
+            osm_type     VARCHAR(10) NULL DEFAULT NULL,
+            created_at   DATETIME NOT NULL,
+            updated_at   DATETIME NOT NULL,
+            PRIMARY KEY  (id),
+            KEY parent_level (parent_id, level),
+            KEY country_code (country_code)
+        ) $charset_collate;");
+
+        dbDelta("CREATE TABLE {$wpdb->prefix}geo_tagger_coord_index (
+            lat_lng_hash CHAR(32) NOT NULL,
+            place_id     BIGINT UNSIGNED NOT NULL,
+            PRIMARY KEY  (lat_lng_hash),
+            KEY place_id (place_id)
+        ) $charset_collate;");
+
+        // Seed world root (no corresponding tag — exists only as tree root)
+        $exists = $wpdb->get_var(
+            "SELECT id FROM {$wpdb->prefix}geo_tagger_places WHERE level = 'world' LIMIT 1"
+        );
+        if (!$exists) {
+            $wpdb->insert(
+                "{$wpdb->prefix}geo_tagger_places",
+                [
+                    'parent_id'  => null,
+                    'level'      => 'world',
+                    'name_fr'    => 'Monde',
+                    'name_en'    => 'World',
+                    'name_de'    => 'Welt',
+                    'created_at' => current_time('mysql'),
+                    'updated_at' => current_time('mysql'),
+                ],
+                ['%s', '%s', '%s', '%s', '%s', '%s', '%s']
+            );
+        }
+    }
+
+    public function get_world_id(): ?int {
+        if ($this->world_id !== null) {
+            return $this->world_id;
+        }
+        global $wpdb;
+        $id = $wpdb->get_var(
+            "SELECT id FROM {$wpdb->prefix}geo_tagger_places WHERE level = 'world' LIMIT 1"
+        );
+        $this->world_id = $id ? (int) $id : null;
+        return $this->world_id;
+    }
+
+    /**
+     * Finds a place by parent + level + any name match.
+     * Builds the WHERE clause dynamically to avoid matching empty strings.
+     */
+    public function find_place(int $parent_id, string $level, array $names): ?object {
+        global $wpdb;
+
+        $conditions = [];
+        $params     = [$parent_id, $level];
+
+        foreach (['fr', 'en', 'de'] as $lang) {
+            $name = $names[$lang] ?? '';
+            if ($name !== '') {
+                $conditions[] = "name_{$lang} = %s";
+                $params[]     = $name;
+            }
+        }
+
+        if (empty($conditions)) {
+            return null;
+        }
+
+        $where_names = '(' . implode(' OR ', $conditions) . ')';
+
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}geo_tagger_places
+                 WHERE parent_id = %d AND level = %s AND {$where_names}
+                 LIMIT 1",
+                ...$params
+            )
+        ) ?: null;
+    }
+
+    public function get_place(int $place_id): ?object {
+        global $wpdb;
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}geo_tagger_places WHERE id = %d",
+                $place_id
+            )
+        ) ?: null;
+    }
+
+    public function create_place(array $data): ?int {
+        global $wpdb;
+        $now            = current_time('mysql');
+        $data['created_at'] = $now;
+        $data['updated_at'] = $now;
+
+        if ($wpdb->insert("{$wpdb->prefix}geo_tagger_places", $data) === false) {
+            error_log('Geo Tagger: Failed to create place: ' . $wpdb->last_error);
+            return null;
+        }
+        return (int) $wpdb->insert_id;
+    }
+
+    /**
+     * Updates only the term_id columns that are provided; never nullifies existing ones.
+     */
+    public function update_term_ids(int $place_id, array $term_ids_by_lang): void {
+        if (empty($term_ids_by_lang)) {
+            return;
+        }
+        global $wpdb;
+        $updates = ['updated_at' => current_time('mysql')];
+        foreach ($term_ids_by_lang as $lang => $term_id) {
+            $updates['term_id_' . $lang] = (int) $term_id;
+        }
+        $wpdb->update("{$wpdb->prefix}geo_tagger_places", $updates, ['id' => $place_id]);
+    }
+
+    /**
+     * Returns the place chain from continent down to the given leaf node.
+     * The world root is excluded (it has no corresponding tag).
+     *
+     * @return object[]  Ordered continent → leaf
+     */
+    public function get_place_chain(int $leaf_place_id): array {
+        $chain      = [];
+        $current_id = $leaf_place_id;
+
+        for ($depth = 0; $depth < 6; $depth++) {
+            $place = $this->get_place($current_id);
+            if (!$place || $place->level === 'world') {
+                break;
+            }
+            array_unshift($chain, $place); // prepend so continent ends up first
+            if ($place->parent_id === null) {
+                break;
+            }
+            $current_id = (int) $place->parent_id;
+        }
+
+        return $chain;
+    }
+
+    public function find_coord(string $lat_lng_hash): ?int {
+        global $wpdb;
+        $id = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT place_id FROM {$wpdb->prefix}geo_tagger_coord_index WHERE lat_lng_hash = %s",
+                $lat_lng_hash
+            )
+        );
+        return $id ? (int) $id : null;
+    }
+
+    public function store_coord(string $lat_lng_hash, int $place_id): void {
+        global $wpdb;
+        $wpdb->replace(
+            "{$wpdb->prefix}geo_tagger_coord_index",
+            ['lat_lng_hash' => $lat_lng_hash, 'place_id' => $place_id]
+        );
+    }
+}
