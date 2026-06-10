@@ -76,22 +76,32 @@ class TagManager {
                 continue;
             }
 
-            // 2. Create WP terms for any language not yet linked on this place node
+            // 2. Create WP terms for any language not yet linked on this place node.
+            //    Also re-create if the stored term ID belongs to a different level
+            //    (can happen when a same-name collision caused a wrong ID to be stored).
             $new_term_ids = [];
             foreach ($languages as $lang) {
                 $name = $names[$lang] ?? null;
                 if (!$name) {
                     continue;
                 }
-                $col = 'term_id_' . $lang;
-                if (empty($place->$col)) {
-                    $term_id = $this->find_or_create_term($name, $lang, $level, $country_code, $summary);
-                    error_log("GeoTagger [{$level}/{$lang}] find_or_create_term('{$name}') => " . ($term_id ?? 'null'));
-                    if ($term_id) {
-                        $new_term_ids[$lang] = $term_id;
-                    }
-                } else {
-                    error_log("GeoTagger [{$level}/{$lang}] skipped — place already has term_id=" . $place->$col);
+                $col       = 'term_id_' . $lang;
+                $stored_id = empty($place->$col) ? 0 : (int) $place->$col;
+
+                if ($stored_id && $this->resolve_term_level($stored_id) === $level) {
+                    error_log("GeoTagger [{$level}/{$lang}] skipped — place already has valid term_id={$stored_id}");
+                    continue;
+                }
+
+                if ($stored_id) {
+                    $wrong_level = $this->resolve_term_level($stored_id);
+                    error_log("GeoTagger [{$level}/{$lang}] CORRUPT stored term_id={$stored_id} belongs to level='{$wrong_level}' — re-creating");
+                }
+
+                $term_id = $this->find_or_create_term($name, $lang, $level, $country_code, $summary);
+                error_log("GeoTagger [{$level}/{$lang}] find_or_create_term('{$name}') => " . ($term_id ?? 'null'));
+                if ($term_id) {
+                    $new_term_ids[$lang] = $term_id;
                 }
             }
 
@@ -100,12 +110,13 @@ class TagManager {
                 $this->place_repo->update_term_ids((int) $place->id, $new_term_ids);
             }
 
-            // 3. Collect all term IDs (pre-existing + newly created) without a DB round-trip
+            // 3. Collect all term IDs (valid pre-existing + newly created) without a DB round-trip
             $all_term_ids = [];
             foreach ($languages as $lang) {
-                $col = 'term_id_' . $lang;
-                if (!empty($place->$col)) {
-                    $all_term_ids[$lang] = (int) $place->$col;
+                $col       = 'term_id_' . $lang;
+                $stored_id = empty($place->$col) ? 0 : (int) $place->$col;
+                if ($stored_id && $this->resolve_term_level($stored_id) === $level) {
+                    $all_term_ids[$lang] = $stored_id;
                 } elseif (isset($new_term_ids[$lang])) {
                     $all_term_ids[$lang] = $new_term_ids[$lang];
                 }
