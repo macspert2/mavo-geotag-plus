@@ -214,26 +214,22 @@ class TagManager {
         $base_slug  = sanitize_title($name) . '-' . $lang;
         $level_slug = sanitize_title($name) . '-' . $level . '-' . $lang;
 
+        // Use raw DB lookups throughout: Polylang filters get_term_by() to the current
+        // post language, hiding EN/DE terms when processing a FR post (and vice versa).
+
         // Level-qualified slug: definitive match when the same name exists at multiple levels.
-        $term = get_term_by('slug', $level_slug, 'post_tag');
-        error_log("GeoTagger foct [{$level}/{$lang}] step1 slug='{$level_slug}': " . ($term ? "found id={$term->term_id} actual_slug={$term->slug}" : 'not found'));
-        if ($term) {
-            $term_id = (int) $term->term_id;
+        $term_id = $this->get_term_id_by_slug($level_slug);
+        if ($term_id) {
             $this->ensure_term_meta($term_id, $level, $country_code, $lang, $name);
             return $term_id;
         }
 
         // Simple slug: valid only when the places table confirms it belongs to this level.
-        $term         = get_term_by('slug', $base_slug, 'post_tag');
-        $found_level  = $term ? $this->resolve_term_level((int) $term->term_id) : '';
-        $db_level     = $term ? ($this->place_repo->get_level_for_term_id((int) $term->term_id) ?? 'null') : '';
-        $meta_level   = $term ? (string) get_term_meta((int) $term->term_id, 'geo_tagger_level', true) : '';
-        error_log("GeoTagger foct [{$level}/{$lang}] step2 slug='{$base_slug}': " . ($term ? "found id={$term->term_id} resolved='{$found_level}' db='{$db_level}' meta='{$meta_level}'" : 'not found'));
-        if ($term && $found_level === $level) {
-            return (int) $term->term_id;
+        $term_id = $this->get_term_id_by_slug($base_slug);
+        if ($term_id && $this->resolve_term_level($term_id) === $level) {
+            return $term_id;
         }
 
-        error_log("GeoTagger foct [{$level}/{$lang}] calling create_term");
         return $this->create_term($name, $lang, $level, $country_code, $summary);
     }
 
@@ -253,23 +249,8 @@ class TagManager {
         string $country_code,
         array  &$summary
     ): ?int {
-        global $wpdb;
-        $slug = sanitize_title($name) . '-' . $lang;
-
-        // Diagnostic: raw DB check bypassing all WordPress/Polylang filters.
-        $raw = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT t.term_id, t.slug FROM {$wpdb->terms} t
-                 INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id
-                 WHERE t.name = %s AND tt.taxonomy = 'post_tag'",
-                $name
-            )
-        );
-        $raw_summary = implode(',', array_map(fn($r) => "{$r->term_id}({$r->slug})", $raw));
-        error_log("GeoTagger create_term [{$level}/{$lang}] entered slug='{$slug}' raw_db_matches=[{$raw_summary}]");
-
+        $slug   = sanitize_title($name) . '-' . $lang;
         $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
-        error_log("GeoTagger create_term [{$level}/{$lang}] wp_insert_term: " . (is_wp_error($result) ? "error={$result->get_error_code()} data={$result->get_error_data()}" : "success term_id={$result['term_id']}"));
 
         if (is_wp_error($result)) {
             if ($result->get_error_code() !== 'term_exists') {
@@ -302,11 +283,45 @@ class TagManager {
             return $term_id;
         }
 
-        $term_id = (int) $result['term_id'];
-        error_log("GeoTagger create_term [{$level}/{$lang}] wp_insert_term success — new term_id={$term_id}");
+        $term_id      = (int) $result['term_id'];
+        $actual_level = $this->resolve_term_level($term_id);
+        if ($actual_level && $actual_level !== $level) {
+            // wp_insert_term() silently reused an existing term from a different level
+            // (Polylang's language filter hid it from term_exists, so WordPress treated
+            // the name as unique but then reused the matching slug via term-sharing).
+            // Force a truly new term with the level-qualified slug.
+            error_log("GeoTagger create_term [{$level}/{$lang}] wp_insert_term reused existing term {$term_id} (level='{$actual_level}') — using level-slug instead");
+            $level_slug = sanitize_title($name) . '-' . $level . '-' . $lang;
+            $term_id    = $this->insert_term_direct($name, $level_slug);
+            if (!$term_id) {
+                $summary['errors'][] = $name;
+                return null;
+            }
+        }
         $this->polylang->set_term_language($term_id, $lang);
         $this->store_term_meta($term_id, $level, $country_code, $lang, $name);
         return $term_id;
+    }
+
+    /**
+     * Looks up a post_tag term by slug using a raw DB query.
+     *
+     * get_term_by() is filtered by Polylang to the current post's language, so when
+     * processing a French post it silently hides English and German terms. A direct
+     * $wpdb query bypasses that filter and returns the term regardless of language.
+     */
+    private function get_term_id_by_slug(string $slug): ?int {
+        global $wpdb;
+        $id = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT t.term_id FROM {$wpdb->terms} t
+                 INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id
+                 WHERE t.slug = %s AND tt.taxonomy = 'post_tag'
+                 LIMIT 1",
+                $slug
+            )
+        );
+        return $id ? (int) $id : null;
     }
 
     /**
@@ -318,9 +333,10 @@ class TagManager {
         global $wpdb;
 
         // Guard: the slug may already exist from a previous partial run.
-        $existing = get_term_by('slug', $slug, 'post_tag');
-        if ($existing) {
-            return (int) $existing->term_id;
+        // Use a raw query — get_term_by() is filtered by Polylang to the current language.
+        $existing_id = $this->get_term_id_by_slug($slug);
+        if ($existing_id) {
+            return $existing_id;
         }
 
         $wpdb->insert($wpdb->terms, ['name' => $name, 'slug' => $slug, 'term_group' => 0]);
