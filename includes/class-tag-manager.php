@@ -216,6 +216,7 @@ class TagManager {
 
         // Level-qualified slug: definitive match when the same name exists at multiple levels.
         $term = get_term_by('slug', $level_slug, 'post_tag');
+        error_log("GeoTagger foct [{$level}/{$lang}] step1 slug='{$level_slug}': " . ($term ? "found id={$term->term_id} actual_slug={$term->slug}" : 'not found'));
         if ($term) {
             $term_id = (int) $term->term_id;
             $this->ensure_term_meta($term_id, $level, $country_code, $lang, $name);
@@ -223,8 +224,12 @@ class TagManager {
         }
 
         // Simple slug: valid only when the places table confirms it belongs to this level.
-        $term = get_term_by('slug', $base_slug, 'post_tag');
-        if ($term && $this->resolve_term_level((int) $term->term_id) === $level) {
+        $term         = get_term_by('slug', $base_slug, 'post_tag');
+        $found_level  = $term ? $this->resolve_term_level((int) $term->term_id) : '';
+        $db_level     = $term ? ($this->place_repo->get_level_for_term_id((int) $term->term_id) ?? 'null') : '';
+        $meta_level   = $term ? (string) get_term_meta((int) $term->term_id, 'geo_tagger_level', true) : '';
+        error_log("GeoTagger foct [{$level}/{$lang}] step2 slug='{$base_slug}': " . ($term ? "found id={$term->term_id} resolved='{$found_level}' db='{$db_level}' meta='{$meta_level}'" : 'not found'));
+        if ($term && $found_level === $level) {
             return (int) $term->term_id;
         }
 
@@ -269,7 +274,9 @@ class TagManager {
             // wp_insert_term() refuses to create a term with the same name even with a
             // different slug, so we bypass its name-uniqueness check via direct DB insert.
             $level_slug = sanitize_title($name) . '-' . $level . '-' . $lang;
+            error_log("GeoTagger create_term [{$level}/{$lang}] calling insert_term_direct slug='{$level_slug}'");
             $term_id    = $this->insert_term_direct($name, $level_slug);
+            error_log("GeoTagger create_term [{$level}/{$lang}] insert_term_direct returned " . ($term_id ?? 'null'));
             if (!$term_id) {
                 $summary['errors'][] = $name;
                 return null;
