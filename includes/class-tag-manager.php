@@ -233,6 +233,7 @@ class TagManager {
             return (int) $term->term_id;
         }
 
+        error_log("GeoTagger foct [{$level}/{$lang}] calling create_term");
         return $this->create_term($name, $lang, $level, $country_code, $summary);
     }
 
@@ -252,8 +253,23 @@ class TagManager {
         string $country_code,
         array  &$summary
     ): ?int {
-        $slug   = sanitize_title($name) . '-' . $lang;
+        global $wpdb;
+        $slug = sanitize_title($name) . '-' . $lang;
+
+        // Diagnostic: raw DB check bypassing all WordPress/Polylang filters.
+        $raw = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT t.term_id, t.slug FROM {$wpdb->terms} t
+                 INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id
+                 WHERE t.name = %s AND tt.taxonomy = 'post_tag'",
+                $name
+            )
+        );
+        $raw_summary = implode(',', array_map(fn($r) => "{$r->term_id}({$r->slug})", $raw));
+        error_log("GeoTagger create_term [{$level}/{$lang}] entered slug='{$slug}' raw_db_matches=[{$raw_summary}]");
+
         $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
+        error_log("GeoTagger create_term [{$level}/{$lang}] wp_insert_term: " . (is_wp_error($result) ? "error={$result->get_error_code()} data={$result->get_error_data()}" : "success term_id={$result['term_id']}"));
 
         if (is_wp_error($result)) {
             if ($result->get_error_code() !== 'term_exists') {
@@ -287,6 +303,7 @@ class TagManager {
         }
 
         $term_id = (int) $result['term_id'];
+        error_log("GeoTagger create_term [{$level}/{$lang}] wp_insert_term success — new term_id={$term_id}");
         $this->polylang->set_term_language($term_id, $lang);
         $this->store_term_meta($term_id, $level, $country_code, $lang, $name);
         return $term_id;
