@@ -7,8 +7,7 @@ defined('ABSPATH') || exit;
 class GeoHierarchy {
 
     private const LEVEL_KEYS = [
-        'city'   => ['city', 'town', 'village', 'hamlet', 'municipality', 'district'],
-        'county' => ['county', 'state_district', 'district', 'city_district'],
+        'city'   => ['city', 'town', 'village', 'hamlet', 'municipality'],
         'region' => ['state', 'province', 'region'],
     ];
 
@@ -55,8 +54,8 @@ class GeoHierarchy {
             ];
         }
 
-        // Region, county, city — in order from broad to narrow
-        foreach (['region', 'county', 'city'] as $level) {
+        // Region and city — in order from broad to narrow
+        foreach (['region', 'city'] as $level) {
             $name = $this->extract_level($address, $level);
             if ($name) {
                 $tags[] = [

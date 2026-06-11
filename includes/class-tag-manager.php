@@ -43,7 +43,7 @@ class TagManager {
 
         error_log('GeoTagger v' . GEO_TAGGER_VERSION . ' apply_geo_tags: post=' . $post_id . ' lang=' . $post_lang . ' levels=' . implode(',', array_keys($level_map)));
 
-        foreach (['continent', 'country', 'region', 'county', 'city'] as $level) {
+        foreach (['continent', 'country', 'region', 'city'] as $level) {
             if (!isset($level_map[$level])) {
                 continue;
             }
