@@ -211,62 +211,24 @@ class TagManager {
         string $country_code,
         array  &$summary
     ): ?int {
-        $term_id = $this->find_term_by_name_and_lang($name, $lang, $level)
-                ?? $this->find_term_by_normalised_name($name, $lang, $level);
+        $base_slug  = sanitize_title($name) . '-' . $lang;
+        $level_slug = sanitize_title($name) . '-' . $level . '-' . $lang;
 
-        if (!$term_id) {
-            $term_id = $this->create_term($name, $lang, $level, $country_code, $summary);
+        // Level-qualified slug: definitive match when the same name exists at multiple levels.
+        $term = get_term_by('slug', $level_slug, 'post_tag');
+        if ($term) {
+            $term_id = (int) $term->term_id;
+            $this->ensure_term_meta($term_id, $level, $country_code, $lang, $name);
+            return $term_id;
         }
 
-        return $term_id;
-    }
-
-    private function find_term_by_name_and_lang(string $name, string $lang, string $level): ?int {
-        $terms = get_terms([
-            'taxonomy'   => 'post_tag',
-            'name'       => $name,
-            'hide_empty' => false,
-            'fields'     => 'ids',
-        ]);
-
-        if (is_wp_error($terms) || empty($terms)) {
-            return null;
+        // Simple slug: valid only when the places table confirms it belongs to this level.
+        $term = get_term_by('slug', $base_slug, 'post_tag');
+        if ($term && $this->resolve_term_level((int) $term->term_id) === $level) {
+            return (int) $term->term_id;
         }
 
-        foreach ($terms as $id) {
-            $term_lang  = $this->polylang->get_term_language((int) $id);
-            $term_level = $this->resolve_term_level((int) $id);
-            error_log("GeoTagger find_by_name '{$name}': term_id={$id} term_lang={$term_lang} resolved_level={$term_level} (want lang={$lang} level={$level})");
-            if ($term_lang === $lang && $term_level === $level) {
-                return (int) $id;
-            }
-        }
-
-        return null;
-    }
-
-    private function find_term_by_normalised_name(string $name, string $lang, string $level): ?int {
-        $term_ids = get_terms([
-            'taxonomy'   => 'post_tag',
-            'hide_empty' => false,
-            'fields'     => 'ids',
-            'meta_query' => [
-                ['key' => 'geo_tagger_name_normalised', 'value' => $this->normalise($name)],
-            ],
-        ]);
-
-        if (is_wp_error($term_ids) || empty($term_ids)) {
-            return null;
-        }
-
-        foreach ($term_ids as $id) {
-            if ($this->polylang->get_term_language((int) $id) === $lang
-                && $this->resolve_term_level((int) $id) === $level) {
-                return (int) $id;
-            }
-        }
-
-        return null;
+        return $this->create_term($name, $lang, $level, $country_code, $summary);
     }
 
     /**
@@ -289,47 +251,79 @@ class TagManager {
         $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
 
         if (is_wp_error($result)) {
-            if ($result->get_error_code() === 'term_exists') {
-                $existing_id    = (int) $result->get_error_data();
-                $existing_level = $this->resolve_term_level($existing_id);
-
-                error_log("GeoTagger create_term '{$name}' ({$level}/{$lang}): slug '{$slug}' exists as term_id={$existing_id} resolved_level='{$existing_level}'");
-
-                if ($existing_level === $level) {
-                    // Exactly the same level — genuinely the same entity, reuse it.
-                    return $existing_id;
-                }
-
-                // Different level: retry with a level-qualified slug to keep the two terms distinct.
-                $slug   = sanitize_title($name) . '-' . $level . '-' . $lang;
-                $result = wp_insert_term($name, 'post_tag', ['slug' => $slug]);
-
-                if (is_wp_error($result)) {
-                    if ($result->get_error_code() === 'term_exists') {
-                        $term_id = (int) $result->get_error_data();
-                        // Repair meta if this term was created in a previous partial run.
-                        if (!get_term_meta($term_id, 'geo_tagger_level', true)) {
-                            $this->polylang->set_term_language($term_id, $lang);
-                            $this->store_term_meta($term_id, $level, $country_code, $lang, $name);
-                        }
-                        return $term_id;
-                    }
-                    error_log('Geo Tagger: Failed to create term "' . $name . '" (' . $level . '/' . $lang . '): ' . $result->get_error_message());
-                    $summary['errors'][] = $name;
-                    return null;
-                }
-            } else {
+            if ($result->get_error_code() !== 'term_exists') {
                 error_log('Geo Tagger: Failed to create term "' . $name . '" (' . $lang . '): ' . $result->get_error_message());
                 $summary['errors'][] = $name;
                 return null;
             }
+
+            $existing_id    = (int) $result->get_error_data();
+            $existing_level = $this->resolve_term_level($existing_id);
+            error_log("GeoTagger create_term '{$name}' ({$level}/{$lang}): slug='{$slug}' term_exists={$existing_id} resolved_level='{$existing_level}'");
+
+            if ($existing_level === $level) {
+                return $existing_id;
+            }
+
+            // Same name, different level (e.g. county "Ibiza" vs city "Ibiza").
+            // wp_insert_term() refuses to create a term with the same name even with a
+            // different slug, so we bypass its name-uniqueness check via direct DB insert.
+            $level_slug = sanitize_title($name) . '-' . $level . '-' . $lang;
+            $term_id    = $this->insert_term_direct($name, $level_slug);
+            if (!$term_id) {
+                $summary['errors'][] = $name;
+                return null;
+            }
+            $this->polylang->set_term_language($term_id, $lang);
+            $this->store_term_meta($term_id, $level, $country_code, $lang, $name);
+            return $term_id;
         }
 
         $term_id = (int) $result['term_id'];
         $this->polylang->set_term_language($term_id, $lang);
         $this->store_term_meta($term_id, $level, $country_code, $lang, $name);
+        return $term_id;
+    }
+
+    /**
+     * Inserts a term directly into the DB, bypassing wp_insert_term()'s name-uniqueness
+     * check. Used when two geographic levels share the same display name (e.g. county
+     * "Ibiza" and city "Ibiza") and we need distinct WP terms for each.
+     */
+    private function insert_term_direct(string $name, string $slug): ?int {
+        global $wpdb;
+
+        // Guard: the slug may already exist from a previous partial run.
+        $existing = get_term_by('slug', $slug, 'post_tag');
+        if ($existing) {
+            return (int) $existing->term_id;
+        }
+
+        $wpdb->insert($wpdb->terms, ['name' => $name, 'slug' => $slug, 'term_group' => 0]);
+        if (!$wpdb->insert_id) {
+            error_log('Geo Tagger: Direct term insert failed for slug=' . $slug . ': ' . $wpdb->last_error);
+            return null;
+        }
+        $term_id = (int) $wpdb->insert_id;
+
+        $wpdb->insert($wpdb->term_taxonomy, [
+            'term_id'     => $term_id,
+            'taxonomy'    => 'post_tag',
+            'description' => '',
+            'parent'      => 0,
+            'count'       => 0,
+        ]);
+
+        clean_term_cache($term_id, 'post_tag', false);
 
         return $term_id;
+    }
+
+    private function ensure_term_meta(int $term_id, string $level, string $cc, string $lang, string $name): void {
+        if (!get_term_meta($term_id, 'geo_tagger_level', true)) {
+            $this->polylang->set_term_language($term_id, $lang);
+            $this->store_term_meta($term_id, $level, $cc, $lang, $name);
+        }
     }
 
     private function link_translations(array $term_ids_by_lang): void {
