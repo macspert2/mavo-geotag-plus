@@ -221,13 +221,13 @@ class DuplicateTagManager {
     //    UPDATE wp_geo_tagger_places SET term_id_fr = {keep_id} WHERE term_id_fr = {drop_id}
     //    (repeated for term_id_en, term_id_de)
     //
-    // 4. Polylang translation group — remove B from its translation group
-    //    pll_get_term_language($drop_id) → $drop_lang
-    //    pll_get_term_translations($drop_id) → $drop_transl
-    //    unset($drop_transl[$drop_lang])
-    //    pll_save_term_translations($drop_transl) — saves the group without B
-    //    Note: we do NOT merge A and B's groups because both terms are the same language;
-    //    they belong to separate, independent translation groups.
+    // 4. Polylang translation group — two cases:
+    //    a) B is in a multi-language group AND A has no group of its own:
+    //       Replace B's slot with A → A inherits the cross-language connections.
+    //       $drop_transl[$drop_lang] = $keep_id; pll_save_term_translations($drop_transl)
+    //    b) B is in a group AND A already has its own group:
+    //       Just remove B from B's group; leave A's group untouched.
+    //       unset($drop_transl[$drop_lang]); pll_save_term_translations($drop_transl)
     //
     // 5. wp_termmeta — copy missing geo_tagger_* meta from B to A, then delete all B meta
     //    For each meta_key starting with 'geo_tagger_' on B: if A has no value for that key,
@@ -308,25 +308,39 @@ class DuplicateTagManager {
         }
         $log[] = "Step 3 — Updated geo_tagger_places: replaced {$drop_id} with {$keep_id} in {$places_updated} column occurrence(s).";
 
-        // Step 4: remove drop_id from its Polylang translation group
-        if (function_exists('pll_get_term_language') && function_exists('pll_get_term_translations')) {
+        // Step 4: Polylang translation group
+        // If B was in a multi-language group AND A has no group of its own,
+        // slide A into B's slot so A inherits the cross-language connections.
+        // If A already has its own group, just remove B cleanly.
+        if (function_exists('pll_get_term_language') && function_exists('pll_get_term_translations') && function_exists('pll_save_term_translations')) {
             $drop_lang   = pll_get_term_language($drop_id) ?: null;
-            $drop_transl = pll_get_term_translations($drop_id);
-            if ($drop_lang && is_array($drop_transl)) {
-                unset($drop_transl[$drop_lang]);
-                if (function_exists('pll_save_term_translations')) {
+            $drop_transl = pll_get_term_translations($drop_id);  // e.g. ['pll_fr'=>B, 'pll_en'=>12345, 'pll_de'=>67890]
+            $keep_transl = pll_get_term_translations($keep_id);  // e.g. ['pll_fr'=>A] if A has no group
+
+            $drop_has_group = is_array($drop_transl) && count($drop_transl) > 1;
+            $keep_has_group = is_array($keep_transl) && count($keep_transl) > 1;
+
+            if ($drop_lang && $drop_has_group) {
+                if (!$keep_has_group) {
+                    // A has no translation group — replace B's slot with A
+                    $drop_transl[$drop_lang] = $keep_id;
+                    pll_save_term_translations($drop_transl);
+                    $log[] = "Step 4 — Kept term {$keep_id} has no translation group; inserted it into drop term's group as {$drop_lang}. Group now: " . json_encode($drop_transl);
+                } else {
+                    // A already has its own group — just remove B from B's group
+                    unset($drop_transl[$drop_lang]);
                     if (!empty($drop_transl)) {
                         pll_save_term_translations($drop_transl);
-                        $log[] = "Step 4 — Removed {$drop_id} ({$drop_lang}) from its Polylang translation group; other members preserved.";
-                    } else {
-                        $log[] = "Step 4 — Removed {$drop_id} from its Polylang translation group; group was empty and has been cleared.";
                     }
+                    $log[] = "Step 4 — Kept term {$keep_id} already has its own translation group; removed {$drop_id} from drop group only.";
                 }
+            } elseif ($drop_lang) {
+                $log[] = "Step 4 — Drop term {$drop_id} had no cross-language group; no translation group changes needed.";
             } else {
-                $log[] = "Step 4 — Polylang: no language found for {$drop_id}, skipped translation group update.";
+                $log[] = "Step 4 — No Polylang language found for {$drop_id}; skipped translation group update.";
             }
         } else {
-            $log[] = "Step 4 — Polylang not available, skipped translation group update.";
+            $log[] = "Step 4 — Polylang not available; skipped translation group update.";
         }
 
         // Step 5: copy missing geo_tagger_* meta from B to A, then delete all B meta
