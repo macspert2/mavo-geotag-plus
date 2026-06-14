@@ -122,7 +122,12 @@ class DuplicateTagManager {
             ];
         }
 
-        wp_send_json_success(['groups' => $groups]);
+        wp_send_json_success([
+            'groups'     => $groups,
+            '_debug_row_count' => count($rows),
+            '_debug_db_error'  => $wpdb->last_error ?: null,
+            '_debug_sql'       => $wpdb->last_query,
+        ]);
     }
 
     // -------------------------------------------------------------------------
