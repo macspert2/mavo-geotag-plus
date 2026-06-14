@@ -88,32 +88,34 @@ class DuplicateTagManager {
 
         global $wpdb;
 
-        // Join through Polylang's term_language taxonomy to get each tag's language,
-        // then group by (name, language) and return groups where more than one term exists.
+        // Polylang stores term language via wp_term_relationships where object_id = term_id
+        // (NOT term_taxonomy_id). LEFT JOIN so terms with no language assignment still appear.
         $rows = $wpdb->get_results(
-            "SELECT t.name,
-                    tl.slug                                                        AS pll_lang,
-                    GROUP_CONCAT(t.term_id ORDER BY t.term_id ASC SEPARATOR ',')   AS term_ids,
-                    COUNT(*)                                                        AS cnt
+            "SELECT t.name                                                           AS tag_name,
+                    tl.lang                                                          AS pll_lang,
+                    GROUP_CONCAT(t.term_id ORDER BY t.term_id ASC SEPARATOR ',')    AS term_ids,
+                    COUNT(*)                                                         AS cnt
              FROM {$wpdb->terms} t
-             INNER JOIN {$wpdb->term_taxonomy} tt
+             JOIN {$wpdb->term_taxonomy} tt
                      ON tt.term_id  = t.term_id
                     AND tt.taxonomy = 'post_tag'
-             INNER JOIN {$wpdb->term_relationships} tr
-                     ON tr.object_id = tt.term_taxonomy_id
-             INNER JOIN {$wpdb->term_taxonomy} tt_lang
-                     ON tt_lang.term_taxonomy_id = tr.term_taxonomy_id
-                    AND tt_lang.taxonomy = 'term_language'
-             INNER JOIN {$wpdb->terms} tl ON tl.term_id = tt_lang.term_id
-             GROUP BY t.name, tl.slug
+             LEFT JOIN (
+                 SELECT tr.object_id AS term_id, t_lang.slug AS lang
+                 FROM {$wpdb->term_relationships} tr
+                 JOIN {$wpdb->term_taxonomy} tt_lang
+                         ON tt_lang.term_taxonomy_id = tr.term_taxonomy_id
+                        AND tt_lang.taxonomy = 'term_language'
+                 JOIN {$wpdb->terms} t_lang ON t_lang.term_id = tt_lang.term_id
+             ) tl ON tl.term_id = t.term_id
+             GROUP BY t.name, tl.lang
              HAVING COUNT(*) > 1
-             ORDER BY FIELD(tl.slug, 'fr', 'en', 'de'), t.name"
+             ORDER BY FIELD(tl.lang, 'fr', 'en', 'de'), t.name"
         );
 
         $groups = [];
         foreach ($rows as $row) {
             $groups[] = [
-                'name'     => $row->name,
+                'name'     => $row->tag_name,
                 'lang'     => $row->pll_lang,
                 'term_ids' => array_map('intval', explode(',', $row->term_ids)),
                 'count'    => (int) $row->cnt,
