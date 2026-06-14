@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.12
+ * Version: 1.0.13
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.12');
+define('GEO_TAGGER_VERSION', '1.0.13');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -22,7 +22,8 @@ spl_autoload_register(function (string $class): void {
         'GeoTagger\\PolylangBridge'  => 'includes/class-polylang-bridge.php',
         'GeoTagger\\BatchProcessor'  => 'includes/class-batch-processor.php',
         'GeoTagger\\PlaceRepository' => 'includes/class-place-repository.php',
-        'GeoTagger\\AdminPage'       => 'admin/class-admin-page.php',
+        'GeoTagger\\AdminPage'            => 'admin/class-admin-page.php',
+        'GeoTagger\\DuplicateTagManager' => 'admin/class-duplicate-tag-manager.php',
     ];
     if (isset($map[$class])) {
         require_once GEO_TAGGER_DIR . $map[$class];
