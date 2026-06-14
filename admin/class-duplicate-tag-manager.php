@@ -109,7 +109,7 @@ class DuplicateTagManager {
              ) tl ON tl.term_id = t.term_id
              GROUP BY t.name, tl.lang
              HAVING COUNT(*) > 1
-             ORDER BY FIELD(tl.lang, 'fr', 'en', 'de'), t.name"
+             ORDER BY FIELD(tl.lang, 'pll_fr', 'pll_en', 'pll_de'), t.name"
         );
 
         $groups = [];
@@ -122,12 +122,7 @@ class DuplicateTagManager {
             ];
         }
 
-        wp_send_json_success([
-            'groups'     => $groups,
-            '_debug_row_count' => count($rows),
-            '_debug_db_error'  => $wpdb->last_error ?: null,
-            '_debug_sql'       => $wpdb->last_query,
-        ]);
+        wp_send_json_success(['groups' => $groups]);
     }
 
     // -------------------------------------------------------------------------

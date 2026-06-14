@@ -52,10 +52,11 @@
             });
 
             let html = '';
-            for (const lang of ['fr', 'en', 'de']) {
+            for (const lang of ['pll_fr', 'pll_en', 'pll_de']) {
                 const items = byLang[lang];
                 if (!items || !items.length) continue;
-                html += '<h3 style="margin-bottom:8px">' + esc(lang.toUpperCase()) + '</h3>';
+                const label = lang.replace('pll_', '').toUpperCase();
+                html += '<h3 style="margin-bottom:8px">' + esc(label) + '</h3>';
                 html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px">';
                 items.forEach(g => {
                     html += '<button class="button gtd-group-btn"'
