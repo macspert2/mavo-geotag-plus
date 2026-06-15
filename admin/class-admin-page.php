@@ -200,8 +200,8 @@ class AdminPage {
                                 Unticked countries go straight from country to city (if applicable).
                             </p>
                             <div style="max-height:220px;overflow-y:auto;border:1px solid #c3c4c7;
-                                        padding:10px 14px;border-radius:3px;background:#fff;
-                                        column-count:3;column-gap:20px">
+                                        padding:10px 14px;border-radius:3px;background:#fff">
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px 20px">
                             <?php foreach ($countries as $c):
                                 $display = $c->name_fr ?: ($c->name_en ?: ($c->name_de ?: strtoupper($c->country_code)));
                                 $checked = in_array($c->country_code, $region_countries, true) ? 'checked' : '';
@@ -215,7 +215,8 @@ class AdminPage {
                                     <span style="color:#888;font-size:11px">(<?php echo esc_html(strtoupper($c->country_code)); ?>)</span>
                                 </label>
                             <?php endforeach; ?>
-                            </div>
+                            </div><!-- /grid -->
+                            </div><!-- /scroll -->
                             <?php endif; ?>
                         </td>
                     </tr>
