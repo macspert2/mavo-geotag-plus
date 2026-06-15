@@ -11,10 +11,13 @@ class GeoBreadcrumb {
     private const ALLOWED_LANGS = ['fr', 'en', 'de'];
 
     private PlaceRepository $place_repo;
-    private array           $chain_cache = [];
+    private array           $chain_cache      = [];
+    private array           $region_countries = [];
 
     public function __construct(PlaceRepository $place_repo) {
-        $this->place_repo = $place_repo;
+        $this->place_repo      = $place_repo;
+        $saved                 = get_option('geo_tagger_settings', []);
+        $this->region_countries = $saved['region_countries'] ?? [];
     }
 
     public function init(): void {
@@ -141,6 +144,14 @@ class GeoBreadcrumb {
             $term_id = empty($place->$col_term) ? 0 : (int) $place->$col_term;
 
             if (!$name || !$term_id) {
+                continue;
+            }
+
+            // Region appears only for countries in the admin whitelist.
+            if ($place->level === 'region'
+                && !empty($this->region_countries)
+                && !in_array($place->country_code, $this->region_countries, true)
+            ) {
                 continue;
             }
 

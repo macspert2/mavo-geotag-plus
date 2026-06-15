@@ -7,11 +7,12 @@ defined('ABSPATH') || exit;
 class Core {
 
     public const DEFAULT_SETTINGS = [
-        'user_agent'    => '',
-        'cache_days'    => 30,
-        'rate_limit_ms' => 1100,
-        'continent_tags'=> true,
-        'min_depth'     => 'city',
+        'user_agent'         => '',
+        'cache_days'         => 30,
+        'rate_limit_ms'      => 1100,
+        'continent_tags'     => true,
+        'min_depth'          => 'city',
+        'region_countries'   => [],
     ];
 
     private GeoMashupDB     $geo_mashup_db;

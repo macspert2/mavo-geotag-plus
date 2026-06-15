@@ -55,14 +55,19 @@ class AdminPage {
             wp_die('Forbidden');
         }
 
+        $raw_countries = isset($_POST['region_countries']) && is_array($_POST['region_countries'])
+            ? $_POST['region_countries']
+            : [];
+
         $settings = [
-            'user_agent'    => sanitize_text_field($_POST['user_agent'] ?? ''),
-            'cache_days'    => absint($_POST['cache_days'] ?? 30),
-            'rate_limit_ms' => absint($_POST['rate_limit_ms'] ?? 1100),
-            'continent_tags'=> !empty($_POST['continent_tags']),
-            'min_depth'     => in_array($_POST['min_depth'] ?? '', ['country', 'region', 'county', 'city'], true)
-                                ? $_POST['min_depth']
-                                : 'city',
+            'user_agent'       => sanitize_text_field($_POST['user_agent'] ?? ''),
+            'cache_days'       => absint($_POST['cache_days'] ?? 30),
+            'rate_limit_ms'    => absint($_POST['rate_limit_ms'] ?? 1100),
+            'continent_tags'   => !empty($_POST['continent_tags']),
+            'min_depth'        => in_array($_POST['min_depth'] ?? '', ['country', 'region', 'county', 'city'], true)
+                                    ? $_POST['min_depth']
+                                    : 'city',
+            'region_countries' => array_values(array_map('sanitize_key', $raw_countries)),
         ];
 
         update_option('geo_tagger_settings', $settings);
@@ -171,6 +176,47 @@ class AdminPage {
                                 </option>
                                 <?php endforeach; ?>
                             </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Breadcrumb region visibility</th>
+                        <td>
+                            <?php
+                            global $wpdb;
+                            $countries = $wpdb->get_results(
+                                "SELECT DISTINCT country_code, name_fr, name_en, name_de
+                                 FROM {$wpdb->prefix}geo_tagger_places
+                                 WHERE level = 'country' AND country_code != ''
+                                 ORDER BY name_fr"
+                            );
+                            $region_countries = $settings['region_countries'] ?? [];
+
+                            if (empty($countries)):
+                            ?>
+                            <p class="description">No countries found yet — run the batch processor first.</p>
+                            <?php else: ?>
+                            <p class="description" style="margin-bottom:8px">
+                                Show the region breadcrumb only for ticked countries.
+                                Unticked countries go straight from country to city (if applicable).
+                            </p>
+                            <div style="max-height:220px;overflow-y:auto;border:1px solid #c3c4c7;
+                                        padding:10px 14px;border-radius:3px;background:#fff;
+                                        column-count:3;column-gap:20px">
+                            <?php foreach ($countries as $c):
+                                $display = $c->name_fr ?: ($c->name_en ?: ($c->name_de ?: strtoupper($c->country_code)));
+                                $checked = in_array($c->country_code, $region_countries, true) ? 'checked' : '';
+                            ?>
+                                <label style="display:block;margin-bottom:4px;break-inside:avoid">
+                                    <input type="checkbox"
+                                           name="region_countries[]"
+                                           value="<?php echo esc_attr($c->country_code); ?>"
+                                           <?php echo $checked; ?>>
+                                    <?php echo esc_html($display); ?>
+                                    <span style="color:#888;font-size:11px">(<?php echo esc_html(strtoupper($c->country_code)); ?>)</span>
+                                </label>
+                            <?php endforeach; ?>
+                            </div>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 </table>
