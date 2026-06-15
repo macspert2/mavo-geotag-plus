@@ -18,8 +18,31 @@ class GeoBreadcrumb {
     }
 
     public function init(): void {
-        add_shortcode('geo_breadcrumb', [$this, 'shortcode']);
-        add_action('wp_head',           [$this, 'output_json_ld']);
+        add_shortcode('geo_breadcrumb',  [$this, 'shortcode']);
+        add_action('wp_head',            [$this, 'output_json_ld']);
+        add_action('wp_enqueue_scripts', [$this, 'enqueue_styles']);
+    }
+
+    public function enqueue_styles(): void {
+        // Register a virtual (no-src) handle so we can attach inline CSS cleanly.
+        wp_register_style('geo-tagger-breadcrumb', false, [], GEO_TAGGER_VERSION);
+        wp_enqueue_style('geo-tagger-breadcrumb');
+        wp_add_inline_style('geo-tagger-breadcrumb', $this->inline_css());
+    }
+
+    private function inline_css(): string {
+        return '.geo-breadcrumb{'
+             .     'display:flex;align-items:center;flex-wrap:wrap;'
+             .     'gap:.15em;line-height:2;'
+             . '}'
+             . '.geo-breadcrumb__sep{'
+             .     'display:inline-flex;align-items:center;'
+             .     'opacity:.35;flex-shrink:0;margin:0 .15em;'
+             . '}'
+             . '.geo-breadcrumb__world,'
+             . '.geo-breadcrumb__item{'
+             .     'display:inline-flex;align-items:center;'
+             . '}';
     }
 
     public function shortcode(array $atts): string {
@@ -177,7 +200,9 @@ class GeoBreadcrumb {
             }
         }
 
-        $sep = '<span class="geo-breadcrumb__sep" aria-hidden="true">›</span>';
+        $sep = '<span class="geo-breadcrumb__sep" aria-hidden="true">'
+             . $this->chevron_icon()
+             . '</span>';
 
         return '<nav class="geo-breadcrumb" aria-label="Geographic location">'
              . implode($sep, $parts)
@@ -263,6 +288,16 @@ class GeoBreadcrumb {
         }
 
         return $leaf ? $this->place_repo->get_place_chain((int) $leaf->id) : [];
+    }
+
+    private function chevron_icon(): string {
+        // A clean right-pointing chevron that inherits colour and scales with text.
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 10"'
+             . ' width=".45em" height=".75em" fill="none" stroke="currentColor"'
+             . ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
+             . ' aria-hidden="true" focusable="false">'
+             . '<polyline points="1,1 5,5 1,9"/>'
+             . '</svg>';
     }
 
     private function world_icon(): string {
