@@ -221,13 +221,18 @@ class DuplicateTagManager {
     //    UPDATE wp_geo_tagger_places SET term_id_fr = {keep_id} WHERE term_id_fr = {drop_id}
     //    (repeated for term_id_en, term_id_de)
     //
-    // 4. Polylang translation group — two cases:
+    // 4. Polylang translation group — runs FIRST, before any row deletions, because
+    //    pll_get_term_language() needs wp_term_taxonomy to be intact to resolve term_id.
+    //    Two sub-cases:
     //    a) B is in a multi-language group AND A has no group of its own:
-    //       Replace B's slot with A → A inherits the cross-language connections.
     //       $drop_transl[$drop_lang] = $keep_id; pll_save_term_translations($drop_transl)
+    //       → A slides into B's language slot and inherits the cross-language connections.
     //    b) B is in a group AND A already has its own group:
-    //       Just remove B from B's group; leave A's group untouched.
     //       unset($drop_transl[$drop_lang]); pll_save_term_translations($drop_transl)
+    //       → B is removed from its group; A's group is untouched.
+    //    After the pll call, explicitly DELETE the two orphaned wp_term_relationships rows
+    //    that pll_save_term_translations never removes: B's translation-group link and
+    //    B's language assignment (both keyed on object_id = B.term_taxonomy_id).
     //
     // 5. wp_termmeta — copy missing geo_tagger_* meta from B to A, then delete all B meta
     //    For each meta_key starting with 'geo_tagger_' on B: if A has no value for that key,
@@ -274,6 +279,74 @@ class DuplicateTagManager {
 
         $log = [];
 
+        // --- Pre-flight: gather Polylang data while B's term_taxonomy row still exists.
+        // pll_get_term_language() needs wp_term_taxonomy to resolve term_id → term_taxonomy_id,
+        // so it must run before we delete that row in Step 2.
+
+        $pll_ok      = function_exists('pll_get_term_language')
+                    && function_exists('pll_get_term_translations')
+                    && function_exists('pll_save_term_translations');
+        $drop_lang   = $pll_ok ? (pll_get_term_language($drop_id) ?: null)   : null;
+        $drop_transl = $pll_ok ? (pll_get_term_translations($drop_id) ?: []) : [];
+        $keep_transl = $pll_ok ? (pll_get_term_translations($keep_id) ?: []) : [];
+
+        // Find B's translation group term_taxonomy_id via raw DB so we can explicitly
+        // remove the orphaned wp_term_relationships row that pll_save_term_translations
+        // adds A to but never removes B from.
+        $drop_group_tt_id = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT tr.term_taxonomy_id
+             FROM {$wpdb->term_relationships} tr
+             JOIN {$wpdb->term_taxonomy} tt
+                     ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                    AND tt.taxonomy = 'term_translations'
+             WHERE tr.object_id = %d",
+            $drop_tt->term_taxonomy_id
+        ));
+
+        // Step 4: Polylang translation group (runs BEFORE any row deletions)
+        $drop_has_group = count($drop_transl) > 1;
+        $keep_has_group = count($keep_transl) > 1;
+
+        if ($pll_ok && $drop_lang && $drop_has_group) {
+            if (!$keep_has_group) {
+                // A has no group — slide A into B's language slot so A inherits the connections
+                $drop_transl[$drop_lang] = $keep_id;
+                pll_save_term_translations($drop_transl);
+                $log[] = "Step 4 — Inserted kept term {$keep_id} into drop term's translation group as {$drop_lang}. Group: " . json_encode($drop_transl);
+            } else {
+                // A already has its own group — just remove B from B's group
+                unset($drop_transl[$drop_lang]);
+                if (!empty($drop_transl)) {
+                    pll_save_term_translations($drop_transl);
+                }
+                $log[] = "Step 4 — Kept term {$keep_id} already has a group; removed {$drop_id} from drop group only.";
+            }
+        } elseif ($drop_lang) {
+            $log[] = "Step 4 — Drop term {$drop_id} had no cross-language group; nothing to transfer.";
+        } else {
+            $log[] = "Step 4 — No Polylang language found for drop term {$drop_id}.";
+        }
+
+        // Explicitly delete B's orphaned wp_term_relationships entries.
+        // pll_save_term_translations adds A's link to the group but never removes B's old link.
+        // We also remove B's language assignment.
+        if ($drop_group_tt_id) {
+            $wpdb->delete($wpdb->term_relationships, [
+                'object_id'        => $drop_tt->term_taxonomy_id,
+                'term_taxonomy_id' => $drop_group_tt_id,
+            ]);
+            $log[] = "Step 4 — Deleted B's orphaned translation-group link (object_id={$drop_tt->term_taxonomy_id}, group_tt={$drop_group_tt_id}).";
+        }
+        $wpdb->query($wpdb->prepare(
+            "DELETE tr FROM {$wpdb->term_relationships} tr
+             JOIN {$wpdb->term_taxonomy} tt_lang
+                     ON tt_lang.term_taxonomy_id = tr.term_taxonomy_id
+                    AND tt_lang.taxonomy = 'term_language'
+             WHERE tr.object_id = %d",
+            $drop_tt->term_taxonomy_id
+        ));
+        $log[] = "Step 4 — Deleted B's language assignment from wp_term_relationships.";
+
         // Step 1: reassign post→tag relationships
         $wpdb->query($wpdb->prepare(
             "INSERT IGNORE INTO {$wpdb->term_relationships} (object_id, term_taxonomy_id, term_order)
@@ -307,41 +380,6 @@ class DuplicateTagManager {
             $places_updated += $n;
         }
         $log[] = "Step 3 — Updated geo_tagger_places: replaced {$drop_id} with {$keep_id} in {$places_updated} column occurrence(s).";
-
-        // Step 4: Polylang translation group
-        // If B was in a multi-language group AND A has no group of its own,
-        // slide A into B's slot so A inherits the cross-language connections.
-        // If A already has its own group, just remove B cleanly.
-        if (function_exists('pll_get_term_language') && function_exists('pll_get_term_translations') && function_exists('pll_save_term_translations')) {
-            $drop_lang   = pll_get_term_language($drop_id) ?: null;
-            $drop_transl = pll_get_term_translations($drop_id);  // e.g. ['pll_fr'=>B, 'pll_en'=>12345, 'pll_de'=>67890]
-            $keep_transl = pll_get_term_translations($keep_id);  // e.g. ['pll_fr'=>A] if A has no group
-
-            $drop_has_group = is_array($drop_transl) && count($drop_transl) > 1;
-            $keep_has_group = is_array($keep_transl) && count($keep_transl) > 1;
-
-            if ($drop_lang && $drop_has_group) {
-                if (!$keep_has_group) {
-                    // A has no translation group — replace B's slot with A
-                    $drop_transl[$drop_lang] = $keep_id;
-                    pll_save_term_translations($drop_transl);
-                    $log[] = "Step 4 — Kept term {$keep_id} has no translation group; inserted it into drop term's group as {$drop_lang}. Group now: " . json_encode($drop_transl);
-                } else {
-                    // A already has its own group — just remove B from B's group
-                    unset($drop_transl[$drop_lang]);
-                    if (!empty($drop_transl)) {
-                        pll_save_term_translations($drop_transl);
-                    }
-                    $log[] = "Step 4 — Kept term {$keep_id} already has its own translation group; removed {$drop_id} from drop group only.";
-                }
-            } elseif ($drop_lang) {
-                $log[] = "Step 4 — Drop term {$drop_id} had no cross-language group; no translation group changes needed.";
-            } else {
-                $log[] = "Step 4 — No Polylang language found for {$drop_id}; skipped translation group update.";
-            }
-        } else {
-            $log[] = "Step 4 — Polylang not available; skipped translation group update.";
-        }
 
         // Step 5: copy missing geo_tagger_* meta from B to A, then delete all B meta
         $drop_meta = $wpdb->get_results($wpdb->prepare(

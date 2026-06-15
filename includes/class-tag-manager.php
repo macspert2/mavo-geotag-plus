@@ -217,17 +217,29 @@ class TagManager {
         // Use raw DB lookups throughout: Polylang filters get_term_by() to the current
         // post language, hiding EN/DE terms when processing a FR post (and vice versa).
 
-        // Level-qualified slug: definitive match when the same name exists at multiple levels.
+        // 1. Level-qualified slug: definitive match when the same name exists at multiple levels.
         $term_id = $this->get_term_id_by_slug($level_slug);
         if ($term_id) {
             $this->ensure_term_meta($term_id, $level, $country_code, $lang, $name);
             return $term_id;
         }
 
-        // Simple slug: valid only when the places table confirms it belongs to this level.
+        // 2. Simple lang-suffixed slug: valid only when level confirmed.
         $term_id = $this->get_term_id_by_slug($base_slug);
         if ($term_id && $this->resolve_term_level($term_id) === $level) {
             return $term_id;
+        }
+
+        // 3. Name + Polylang language: catches pre-existing tags whose slug has no
+        //    language suffix (e.g. slug='italy' for name='Italy' lang='en').
+        $term_id = $this->get_term_id_by_name_and_lang($name, $lang);
+        if ($term_id) {
+            $existing_level = $this->resolve_term_level($term_id);
+            if (!$existing_level || $existing_level === $level) {
+                error_log("GeoTagger [{$level}/{$lang}] find_or_create_term: found by name+lang (term_id={$term_id}, slug=" . get_term($term_id)->slug . ")");
+                $this->ensure_term_meta($term_id, $level, $country_code, $lang, $name);
+                return $term_id;
+            }
         }
 
         return $this->create_term($name, $lang, $level, $country_code, $summary);
@@ -325,6 +337,37 @@ class TagManager {
     }
 
     /**
+     * Finds a post_tag by exact name within a specific Polylang language.
+     * Catches pre-existing tags whose slug has no language suffix (e.g. slug='italy').
+     * Polylang stores the language via wp_term_relationships where
+     * object_id = term_taxonomy_id (post_tag) → term_language taxonomy.
+     */
+    private function get_term_id_by_name_and_lang(string $name, string $lang): ?int {
+        global $wpdb;
+        $id = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT t.term_id
+                 FROM {$wpdb->terms} t
+                 JOIN {$wpdb->term_taxonomy} tt
+                         ON tt.term_id  = t.term_id
+                        AND tt.taxonomy = 'post_tag'
+                 JOIN {$wpdb->term_relationships} tr ON tr.object_id = tt.term_taxonomy_id
+                 JOIN {$wpdb->term_taxonomy} tt_lang
+                         ON tt_lang.term_taxonomy_id = tr.term_taxonomy_id
+                        AND tt_lang.taxonomy = 'term_language'
+                 JOIN {$wpdb->terms} t_lang
+                         ON t_lang.term_id = tt_lang.term_id
+                        AND t_lang.slug   = %s
+                 WHERE t.name = %s
+                 LIMIT 1",
+                'pll_' . $lang,
+                $name
+            )
+        );
+        return $id ? (int) $id : null;
+    }
+
+    /**
      * Inserts a term directly into the DB, bypassing wp_insert_term()'s name-uniqueness
      * check. Used when two geographic levels share the same display name (e.g. county
      * "Ibiza" and city "Ibiza") and we need distinct WP terms for each.
@@ -376,6 +419,83 @@ class TagManager {
             }
         }
         $this->polylang->save_term_translations($merged);
+        // pll_set_term_language() creates a singleton term_translations group for each new
+        // term. pll_save_term_translations() builds the combined group but does not always
+        // remove the now-empty singletons. Clean them up here.
+        $this->cleanup_singleton_translation_groups(array_values($term_ids_by_lang));
+    }
+
+    /**
+     * Deletes orphaned singleton term_translations groups left behind by pll_set_term_language().
+     * After pll_save_term_translations() consolidates terms into one group, any remaining
+     * groups that reference only a single term are safe to remove.
+     */
+    private function cleanup_singleton_translation_groups(array $term_ids): void {
+        global $wpdb;
+
+        if (empty($term_ids)) {
+            return;
+        }
+
+        // Get the post_tag term_taxonomy_ids for our terms
+        $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
+        $tt_ids       = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT term_taxonomy_id FROM {$wpdb->term_taxonomy}
+                 WHERE term_id IN ($placeholders) AND taxonomy = 'post_tag'",
+                ...$term_ids
+            )
+        );
+
+        if (empty($tt_ids)) {
+            return;
+        }
+
+        // Find all term_translations groups linked to any of our terms
+        $ph2           = implode(',', array_fill(0, count($tt_ids), '%d'));
+        $group_tt_ids  = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT DISTINCT tr.term_taxonomy_id
+                 FROM {$wpdb->term_relationships} tr
+                 JOIN {$wpdb->term_taxonomy} tt
+                         ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                        AND tt.taxonomy = 'term_translations'
+                 WHERE tr.object_id IN ($ph2)",
+                ...$tt_ids
+            )
+        );
+
+        foreach ($group_tt_ids as $group_tt_id) {
+            $description = $wpdb->get_var($wpdb->prepare(
+                "SELECT description FROM {$wpdb->term_taxonomy} WHERE term_taxonomy_id = %d",
+                $group_tt_id
+            ));
+
+            $data = maybe_unserialize($description);
+
+            // Only remove true singletons (exactly one entry in the serialised array)
+            if (!is_array($data) || count($data) !== 1) {
+                continue;
+            }
+
+            $group_term_id = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT term_id FROM {$wpdb->term_taxonomy} WHERE term_taxonomy_id = %d",
+                $group_tt_id
+            ));
+
+            $wpdb->delete($wpdb->term_relationships, ['term_taxonomy_id' => $group_tt_id]);
+            $wpdb->delete($wpdb->term_taxonomy,      ['term_taxonomy_id' => $group_tt_id]);
+
+            if ($group_term_id) {
+                $still_used = (int) $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$wpdb->term_taxonomy} WHERE term_id = %d",
+                    $group_term_id
+                ));
+                if ($still_used === 0) {
+                    $wpdb->delete($wpdb->terms, ['term_id' => $group_term_id]);
+                }
+            }
+        }
     }
 
     private function store_term_meta(int $term_id, string $level, string $cc, string $lang, string $name): void {
