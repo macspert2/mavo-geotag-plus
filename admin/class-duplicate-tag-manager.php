@@ -112,12 +112,64 @@ class DuplicateTagManager {
              ORDER BY FIELD(tl.lang, 'pll_fr', 'pll_en', 'pll_de'), t.name"
         );
 
+        // Batch-fetch the geo_tagger_places level for every term_id in one query.
+        $all_term_ids = [];
+        foreach ($rows as $row) {
+            foreach (explode(',', $row->term_ids) as $tid) {
+                $all_term_ids[(int) $tid] = true;
+            }
+        }
+
+        $level_map = [];
+        if (!empty($all_term_ids)) {
+            $ids = array_keys($all_term_ids);
+            $ph  = implode(',', array_fill(0, count($ids), '%d'));
+            // UNION ALL expands the three term_id columns into (term_id, level, id) rows;
+            // ORDER BY id ASC + first-seen logic picks the lowest-id place row per term,
+            // matching the same precedence used by get_level_for_term_id().
+            $place_rows = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT term_id, level FROM (
+                         SELECT term_id_fr AS term_id, level, id
+                           FROM {$wpdb->prefix}geo_tagger_places WHERE term_id_fr IN ($ph)
+                         UNION ALL
+                         SELECT term_id_en, level, id
+                           FROM {$wpdb->prefix}geo_tagger_places WHERE term_id_en IN ($ph)
+                         UNION ALL
+                         SELECT term_id_de, level, id
+                           FROM {$wpdb->prefix}geo_tagger_places WHERE term_id_de IN ($ph)
+                     ) combined ORDER BY id ASC",
+                    ...array_merge($ids, $ids, $ids)
+                )
+            );
+            foreach ($place_rows as $r) {
+                $tid = (int) $r->term_id;
+                if (!isset($level_map[$tid])) {
+                    $level_map[$tid] = $r->level;
+                }
+            }
+        }
+
+        // Exclude groups where every term has a known, distinct level in geo_tagger_places.
+        // Those are intentional same-name tags at different geographic levels
+        // (e.g. "Arequipa" as region and "Arequipa" as city) — not errors to be merged.
         $groups = [];
         foreach ($rows as $row) {
+            $term_ids      = array_map('intval', explode(',', $row->term_ids));
+            $levels        = array_map(fn($tid) => $level_map[$tid] ?? null, $term_ids);
+            $placed_levels = array_values(array_filter($levels));
+
+            if (
+                count($placed_levels) === count($term_ids) &&        // every term is in the places table
+                count(array_unique($placed_levels)) === count($term_ids) // every term has a distinct level
+            ) {
+                continue;
+            }
+
             $groups[] = [
                 'name'     => $row->tag_name,
                 'lang'     => $row->pll_lang,
-                'term_ids' => array_map('intval', explode(',', $row->term_ids)),
+                'term_ids' => $term_ids,
                 'count'    => (int) $row->cnt,
             ];
         }
