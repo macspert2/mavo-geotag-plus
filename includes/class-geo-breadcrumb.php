@@ -10,6 +10,10 @@ class GeoBreadcrumb {
     private const LEVEL_ORDER   = ['continent' => 1, 'country' => 2, 'region' => 3, 'city' => 4];
     private const ALLOWED_LANGS = ['fr', 'en', 'de'];
 
+    private const META_HTML        = '_geo_breadcrumb_html';
+    private const META_JSON        = '_geo_breadcrumb_json';
+    private const META_FINGERPRINT = '_geo_breadcrumb_fingerprint';
+
     private PlaceRepository $place_repo;
     private array           $chain_cache      = [];
     private array           $region_countries = [];
@@ -54,69 +58,85 @@ class GeoBreadcrumb {
     }
 
     /**
-     * Returns the breadcrumb <nav> HTML for a post.
+     * Returns the cached breadcrumb <nav> HTML for a post.
      * Pass 0 (default) to use the current post in the loop.
+     * Reads postmeta as-is — see sync_post_cache() for how/when it's (re)computed.
      */
     public function render(int $post_id = 0): string {
-        [$post_id, $lang, $items] = $this->load($post_id);
-        if (empty($items)) {
+        if (!$post_id) {
+            $post_id = (int) get_the_ID();
+        }
+        if (!$post_id) {
             return '';
         }
-        return $this->build_html($items);
+        $html = get_post_meta($post_id, self::META_HTML, true);
+        return is_string($html) ? $html : '';
     }
 
     /**
-     * Outputs a BreadcrumbList JSON-LD block into <head> for singular posts.
+     * Outputs the cached BreadcrumbList JSON-LD block into <head> for singular posts.
      */
     public function output_json_ld(): void {
         if (!is_singular()) {
             return;
         }
-        [$post_id, $lang, $items] = $this->load(0);
+        $post_id = (int) get_the_ID();
+        if (!$post_id) {
+            return;
+        }
+        $json = get_post_meta($post_id, self::META_JSON, true);
+        if (empty($json) || !is_string($json)) {
+            return;
+        }
+        // Defensive: a manual postmeta edit could reintroduce a script-closing sequence.
+        echo '<script type="application/ld+json">'
+           . str_replace('</script', '<\/script', $json)
+           . '</script>' . "\n";
+    }
+
+    /**
+     * Recomputes and caches the breadcrumb HTML + JSON-LD for a post, but only
+     * when its resolved geographic leaf (or language) actually changed since the
+     * last cache write. This preserves any manual link edits made directly in
+     * postmeta when a batch rerun resolves the post to the same location.
+     */
+    public function sync_post_cache(int $post_id): void {
+        $lang = function_exists('pll_get_post_language')
+            ? (string) pll_get_post_language($post_id)
+            : '';
+        if (!in_array($lang, self::ALLOWED_LANGS, true)) {
+            return;
+        }
+
+        $chain = $this->get_cached_chain($post_id, $lang);
+        if (empty($chain)) {
+            return;
+        }
+
+        $leaf        = end($chain);
+        $fingerprint = $leaf->id . '_' . $lang;
+
+        if (get_post_meta($post_id, self::META_FINGERPRINT, true) === $fingerprint) {
+            return;
+        }
+
+        $items = $this->resolve_items($chain, $lang);
         if (empty($items)) {
             return;
         }
-        $payload = $this->build_json_ld($items);
-        if (empty($payload)) {
-            return;
-        }
-        echo '<script type="application/ld+json">'
-           . wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-           . '</script>' . "\n";
+
+        $json_ld = $this->build_json_ld($items);
+
+        update_post_meta($post_id, self::META_HTML, $this->build_html($items));
+        update_post_meta($post_id, self::META_JSON, empty($json_ld)
+            ? ''
+            : wp_json_encode($json_ld, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        update_post_meta($post_id, self::META_FINGERPRINT, $fingerprint);
     }
 
     // -------------------------------------------------------------------------
     // Shared resolution pipeline
     // -------------------------------------------------------------------------
-
-    /**
-     * Resolves post_id + lang, fetches (and caches) the place chain, then
-     * converts it to a flat list of breadcrumb items.
-     * Returns [$post_id, $lang, $items] where $items is empty on failure.
-     */
-    private function load(int $post_id): array {
-        if (!$post_id) {
-            $post_id = (int) get_the_ID();
-        }
-        if (!$post_id) {
-            return [0, '', []];
-        }
-
-        $lang = function_exists('pll_get_post_language')
-            ? (string) pll_get_post_language($post_id)
-            : '';
-
-        if (!in_array($lang, self::ALLOWED_LANGS, true)) {
-            return [$post_id, '', []];
-        }
-
-        $chain = $this->get_cached_chain($post_id, $lang);
-        if (empty($chain)) {
-            return [$post_id, $lang, []];
-        }
-
-        return [$post_id, $lang, $this->resolve_items($chain, $lang)];
-    }
 
     /**
      * Converts a place chain into an ordered list of breadcrumb items.

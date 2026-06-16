@@ -21,6 +21,7 @@ class Core {
     private TagManager      $tag_manager;
     private PolylangBridge  $polylang;
     private PlaceRepository $place_repo;
+    private GeoBreadcrumb   $breadcrumb;
     private array           $settings;
 
     public function __construct() {
@@ -37,6 +38,7 @@ class Core {
         $this->geo_hierarchy = new GeoHierarchy();
         $this->place_repo    = new PlaceRepository();
         $this->tag_manager   = new TagManager($this->geo_hierarchy, $this->polylang, $this->place_repo);
+        $this->breadcrumb    = new GeoBreadcrumb($this->place_repo);
     }
 
     public function init(): void {
@@ -81,16 +83,21 @@ class Core {
         // Fast path: coordinates already resolved to a place node
         $leaf_place_id = $this->place_repo->find_coord($hash);
         if ($leaf_place_id) {
-            return $this->tag_manager->attach_from_place_chain($post_id, $leaf_place_id, $lang);
+            $summary = $this->tag_manager->attach_from_place_chain($post_id, $leaf_place_id, $lang);
+        } else {
+            // Slow path: geocode (transient cache → Nominatim)
+            $geo_data = $this->nominatim->reverse_geocode($lat, $lng);
+            if (!$geo_data) {
+                return [];
+            }
+            $summary = $this->tag_manager->apply_geo_tags($post_id, $geo_data, $lang, $hash);
         }
 
-        // Slow path: geocode (transient cache → Nominatim)
-        $geo_data = $this->nominatim->reverse_geocode($lat, $lng);
-        if (!$geo_data) {
-            return [];
-        }
+        // Only rewrites cached breadcrumb postmeta when the resolved location
+        // actually changed — preserves any manual link edits otherwise.
+        $this->breadcrumb->sync_post_cache($post_id);
 
-        return $this->tag_manager->apply_geo_tags($post_id, $geo_data, $lang, $hash);
+        return $summary;
     }
 
     /**

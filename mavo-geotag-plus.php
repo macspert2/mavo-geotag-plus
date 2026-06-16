@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.22
+ * Version: 1.0.23
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.22');
+define('GEO_TAGGER_VERSION', '1.0.23');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -65,11 +65,17 @@ add_action('plugins_loaded', function (): void {
  * Continent/Country/Region link to their tag archive pages.
  * City is only included when more than one post shares that city tag.
  *
+ * The HTML (and the JSON-LD output in <head>) is read verbatim from the
+ * '_geo_breadcrumb_html' / '_geo_breadcrumb_json' postmeta — it is computed
+ * once when the post is geo-tagged (see Core::tag_single_post()) and only
+ * recomputed if the resolved location later changes. Edit those postmeta
+ * values directly to override individual links without losing them on rerun.
+ *
  * Usage in templates:   echo geo_tagger_breadcrumb( get_the_ID() );
  * Usage as shortcode:   [geo_breadcrumb]  or  [geo_breadcrumb post_id="123"]
  *
  * @param int $post_id  Post ID. Defaults to the current post in the loop.
- * @return string       HTML <nav> string, or empty string if no geo data.
+ * @return string       HTML <nav> string, or empty string if no cached breadcrumb.
  */
 function geo_tagger_breadcrumb(int $post_id = 0): string {
     $instance = $GLOBALS['geo_tagger_breadcrumb'] ?? null;
