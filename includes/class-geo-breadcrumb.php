@@ -26,8 +26,16 @@ class GeoBreadcrumb {
 
     public function init(): void {
         add_shortcode('geo_breadcrumb',  [$this, 'shortcode']);
-        add_action('wp_head',            [$this, 'output_json_ld']);
         add_action('wp_enqueue_scripts', [$this, 'enqueue_styles']);
+
+        if (defined('WPSEO_VERSION')) {
+            // Yoast SEO already emits a BreadcrumbList inside its own @graph.
+            // Replace its itemListElement with ours instead of outputting a
+            // second, competing BreadcrumbList block.
+            add_filter('wpseo_schema_breadcrumb', [$this, 'filter_yoast_breadcrumb']);
+        } else {
+            add_action('wp_head', [$this, 'output_json_ld']);
+        }
     }
 
     public function enqueue_styles(): void {
@@ -92,6 +100,36 @@ class GeoBreadcrumb {
         echo '<script type="application/ld+json">'
            . str_replace('</script', '<\/script', $json)
            . '</script>' . "\n";
+    }
+
+    /**
+     * Replaces Yoast SEO's BreadcrumbList itemListElement with our cached one,
+     * for singular posts that have a geo breadcrumb. Yoast's own '@id' (and the
+     * rest of its @graph) is left untouched, so anything referencing the
+     * breadcrumb piece by @id keeps working.
+     */
+    public function filter_yoast_breadcrumb(array $data): array {
+        if (!is_singular()) {
+            return $data;
+        }
+
+        $post_id = (int) get_queried_object_id();
+        if (!$post_id) {
+            return $data;
+        }
+
+        $json = get_post_meta($post_id, self::META_JSON, true);
+        if (empty($json) || !is_string($json)) {
+            return $data;
+        }
+
+        $decoded = json_decode($json, true);
+        if (empty($decoded['itemListElement']) || !is_array($decoded['itemListElement'])) {
+            return $data;
+        }
+
+        $data['itemListElement'] = $decoded['itemListElement'];
+        return $data;
     }
 
     /**
