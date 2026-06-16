@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.24
+ * Version: 1.0.27
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.24');
+define('GEO_TAGGER_VERSION', '1.0.27');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -80,4 +80,30 @@ add_action('plugins_loaded', function (): void {
 function geo_tagger_breadcrumb(int $post_id = 0): string {
     $instance = $GLOBALS['geo_tagger_breadcrumb'] ?? null;
     return $instance ? $instance->render($post_id) : '';
+}
+
+/**
+ * Returns the geographic breadcrumb HTML for a post_tag archive page, when that
+ * tag corresponds to a node in the geo_tagger_places hierarchy (continent, country,
+ * region or city tags created by this plugin). Returns '' for ordinary tags.
+ *
+ * Displays: Home › [globe icon] › Continent › Country › Region › City(current)
+ * The tag currently being viewed is shown as plain (non-linked) text; every
+ * ancestor above it links to its own tag archive.
+ *
+ * The HTML (and the JSON-LD output in <head>) is cached in termmeta on first view
+ * and read verbatim after that (see GeoBreadcrumb::sync_term_cache()). Edit the
+ * '_geo_breadcrumb_html' / '_geo_breadcrumb_json' termmeta directly on the term to
+ * override individual links without losing them on the next view.
+ *
+ * Usage in a taxonomy/archive template:
+ *     echo geo_tagger_term_breadcrumb( get_queried_object_id() );
+ * or with no args, inside the tag archive loop, it defaults to the queried term.
+ *
+ * @param int $term_id  post_tag term ID. Defaults to the currently queried term.
+ * @return string       HTML <nav> string, or empty string if this tag isn't a geo place.
+ */
+function geo_tagger_term_breadcrumb(int $term_id = 0): string {
+    $instance = $GLOBALS['geo_tagger_breadcrumb'] ?? null;
+    return $instance ? $instance->render_term($term_id) : '';
 }

@@ -216,4 +216,21 @@ class PlaceRepository {
         );
         return $level ?: null;
     }
+
+    /**
+     * Returns the full place row whose term_id_fr/en/de matches the given term ID,
+     * or null if this term doesn't correspond to a node in the hierarchy.
+     */
+    public function get_place_by_term_id(int $term_id): ?object {
+        global $wpdb;
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}geo_tagger_places
+                 WHERE term_id_fr = %d OR term_id_en = %d OR term_id_de = %d
+                 ORDER BY id ASC
+                 LIMIT 1",
+                $term_id, $term_id, $term_id
+            )
+        ) ?: null;
+    }
 }

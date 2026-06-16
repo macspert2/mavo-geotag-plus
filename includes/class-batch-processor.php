@@ -15,11 +15,12 @@ class BatchProcessor {
     }
 
     public function init(): void {
-        add_action('wp_ajax_geo_tagger_batch_run',      [$this, 'ajax_run_batch']);
-        add_action('wp_ajax_geo_tagger_batch_count',    [$this, 'ajax_get_count']);
-        add_action('wp_ajax_geo_tagger_clear_cache',    [$this, 'ajax_clear_cache']);
-        add_action('wp_ajax_geo_tagger_test_nominatim', [$this, 'ajax_test_nominatim']);
-        add_action('wp_ajax_geo_tagger_process_single', [$this, 'ajax_process_single']);
+        add_action('wp_ajax_geo_tagger_batch_run',              [$this, 'ajax_run_batch']);
+        add_action('wp_ajax_geo_tagger_batch_count',            [$this, 'ajax_get_count']);
+        add_action('wp_ajax_geo_tagger_clear_cache',            [$this, 'ajax_clear_cache']);
+        add_action('wp_ajax_geo_tagger_clear_breadcrumb_cache', [$this, 'ajax_clear_breadcrumb_cache']);
+        add_action('wp_ajax_geo_tagger_test_nominatim',         [$this, 'ajax_test_nominatim']);
+        add_action('wp_ajax_geo_tagger_process_single',         [$this, 'ajax_process_single']);
     }
 
     public function ajax_get_count(): void {
@@ -82,6 +83,35 @@ class BatchProcessor {
         );
 
         wp_send_json_success(['deleted' => (int)$deleted]);
+    }
+
+    /**
+     * Deletes the cached breadcrumb HTML/JSON-LD/fingerprint for every post and tag,
+     * so the next save/batch run (posts) or page view (tag archives) regenerates it
+     * from scratch — e.g. after a breadcrumb template/styling change, or a
+     * region-whitelist update.
+     */
+    public function ajax_clear_breadcrumb_cache(): void {
+        check_ajax_referer('geo_tagger_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Forbidden', 403);
+        }
+
+        global $wpdb;
+        $deleted_posts = $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$wpdb->postmeta} WHERE meta_key IN (%s, %s, %s)",
+            GeoBreadcrumb::META_HTML,
+            GeoBreadcrumb::META_JSON,
+            GeoBreadcrumb::META_FINGERPRINT
+        ));
+        $deleted_terms = $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$wpdb->termmeta} WHERE meta_key IN (%s, %s, %s)",
+            GeoBreadcrumb::META_HTML,
+            GeoBreadcrumb::META_JSON,
+            GeoBreadcrumb::META_FINGERPRINT
+        ));
+
+        wp_send_json_success(['deleted' => (int) $deleted_posts + (int) $deleted_terms]);
     }
 
     public function ajax_process_single(): void {

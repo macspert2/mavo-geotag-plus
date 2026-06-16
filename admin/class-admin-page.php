@@ -258,6 +258,15 @@ class AdminPage {
                 <button type="button" id="gt-clear-cache" class="button" style="margin-left:10px">
                     Clear Nominatim Cache
                 </button>
+                <button type="button" id="gt-clear-breadcrumb-cache" class="button" style="margin-left:10px">
+                    Clear Breadcrumb Cache
+                </button>
+            </p>
+            <p class="description">
+                "Clear Breadcrumb Cache" deletes the cached breadcrumb HTML/JSON-LD for all posts
+                and tag archives (including any manual link edits) so the next save/batch run
+                (posts) or page view (tag archives) regenerates them — use after changing the
+                breadcrumb template, styling, or region whitelist.
             </p>
 
             <div id="gt-progress" style="display:none;max-width:600px;margin-top:15px">

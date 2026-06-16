@@ -86,6 +86,28 @@
         }
     }
 
+    async function clearBreadcrumbCache() {
+        const btn = document.getElementById('gt-clear-breadcrumb-cache');
+        if (!confirm(
+            'This deletes the cached breadcrumb HTML and JSON-LD for ALL posts and tag archives, '
+            + 'including any manual link edits made directly in postmeta/termmeta.\n\n'
+            + 'Posts regenerate the next time they are saved or batch-processed; tag archives '
+            + 'regenerate the next time their page is viewed.\n\n'
+            + 'Continue?'
+        )) {
+            return;
+        }
+        btn.disabled = true;
+        try {
+            const result = await post('geo_tagger_clear_breadcrumb_cache', {});
+            alert('Breadcrumb cache cleared. Deleted ' + result.deleted + ' meta row(s).');
+        } catch (err) {
+            alert('Error: ' + err.message);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
     function esc(str) {
         return String(str)
             .replace(/&/g, '&amp;')
@@ -166,6 +188,7 @@
     document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('gt-run-batch')       ?.addEventListener('click', runBatch);
         document.getElementById('gt-clear-cache')     ?.addEventListener('click', clearCache);
+        document.getElementById('gt-clear-breadcrumb-cache') ?.addEventListener('click', clearBreadcrumbCache);
         document.getElementById('gt-test-nominatim')  ?.addEventListener('click', testNominatim);
         document.getElementById('gt-single-post-btn')  ?.addEventListener('click', () => processSinglePost(false));
         document.getElementById('gt-single-force-btn') ?.addEventListener('click', () => processSinglePost(true));
