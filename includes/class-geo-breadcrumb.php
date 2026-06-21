@@ -7,7 +7,6 @@ defined('ABSPATH') || exit;
 class GeoBreadcrumb {
 
     private const WORLD_URL     = 'https://www.mamanvoyage.com/ou-partir-trouvez-votre-prochain-voyage/';
-    private const LEVEL_ORDER   = ['continent' => 1, 'country' => 2, 'region' => 3, 'city' => 4];
     private const ALLOWED_LANGS = ['fr', 'en', 'de'];
     private const HOME_LABELS   = ['fr' => 'Accueil', 'en' => 'Home', 'de' => 'Startseite'];
 
@@ -483,53 +482,16 @@ class GeoBreadcrumb {
     // Data helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Resolution itself now lives in PlaceRepository::get_chain_for_post()
+     * (shared with RelatedPosts) — this just adds the per-request cache.
+     */
     private function get_cached_chain(int $post_id, string $lang): array {
         $key = $post_id . '_' . $lang;
         if (!array_key_exists($key, $this->chain_cache)) {
-            $this->chain_cache[$key] = $this->get_place_chain_for_post($post_id, $lang);
+            $this->chain_cache[$key] = $this->place_repo->get_chain_for_post($post_id, $lang);
         }
         return $this->chain_cache[$key];
-    }
-
-    /**
-     * Finds the post's geo tags in geo_tagger_places, picks the deepest level
-     * (city > region > country > continent) as the leaf, and returns the full
-     * chain from continent down to that leaf via PlaceRepository::get_place_chain().
-     */
-    private function get_place_chain_for_post(int $post_id, string $lang): array {
-        global $wpdb;
-
-        $term_ids = wp_get_post_terms($post_id, 'post_tag', ['fields' => 'ids']);
-        if (empty($term_ids) || is_wp_error($term_ids)) {
-            return [];
-        }
-
-        // $lang is whitelisted to fr/en/de above, so the column name is safe.
-        $col          = 'term_id_' . $lang;
-        $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
-
-        $places = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT * FROM {$wpdb->prefix}geo_tagger_places WHERE {$col} IN ($placeholders)",
-                ...$term_ids
-            )
-        );
-
-        if (empty($places)) {
-            return [];
-        }
-
-        $leaf      = null;
-        $max_depth = 0;
-        foreach ($places as $place) {
-            $depth = self::LEVEL_ORDER[$place->level] ?? 0;
-            if ($depth > $max_depth) {
-                $max_depth = $depth;
-                $leaf      = $place;
-            }
-        }
-
-        return $leaf ? $this->place_repo->get_place_chain((int) $leaf->id) : [];
     }
 
     private function chevron_icon(bool $flip = false): string {

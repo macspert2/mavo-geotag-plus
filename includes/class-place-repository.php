@@ -6,6 +6,9 @@ defined('ABSPATH') || exit;
 
 class PlaceRepository {
 
+    private const LEVEL_ORDER = ['continent' => 1, 'country' => 2, 'region' => 3, 'city' => 4];
+    private const ALLOWED_LANGS = ['fr', 'en', 'de'];
+
     private ?int $world_id = null;
 
     public static function install(): void {
@@ -169,6 +172,54 @@ class PlaceRepository {
         }
 
         return $chain;
+    }
+
+    /**
+     * Resolves a post to its full geographic place chain (continent → leaf),
+     * via whichever of its post_tag terms is the deepest geo tag it carries
+     * (city > region > country > continent). Moved here from GeoBreadcrumb
+     * (where it was private) so RelatedPosts can share the exact same
+     * "post → place" resolution rather than duplicating the query.
+     *
+     * @return object[] Ordered continent → leaf, or [] if the post has no geo tags.
+     */
+    public function get_chain_for_post(int $post_id, string $lang): array {
+        if (!in_array($lang, self::ALLOWED_LANGS, true)) {
+            return [];
+        }
+
+        global $wpdb;
+
+        $term_ids = wp_get_post_terms($post_id, 'post_tag', ['fields' => 'ids']);
+        if (empty($term_ids) || is_wp_error($term_ids)) {
+            return [];
+        }
+
+        $col          = 'term_id_' . $lang;
+        $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
+
+        $places = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}geo_tagger_places WHERE {$col} IN ($placeholders)",
+                ...$term_ids
+            )
+        );
+
+        if (empty($places)) {
+            return [];
+        }
+
+        $leaf      = null;
+        $max_depth = 0;
+        foreach ($places as $place) {
+            $depth = self::LEVEL_ORDER[$place->level] ?? 0;
+            if ($depth > $max_depth) {
+                $max_depth = $depth;
+                $leaf      = $place;
+            }
+        }
+
+        return $leaf ? $this->get_place_chain((int) $leaf->id) : [];
     }
 
     public function find_coord(string $lat_lng_hash): ?int {
