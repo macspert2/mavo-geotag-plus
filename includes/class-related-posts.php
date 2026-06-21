@@ -316,12 +316,19 @@ class RelatedPosts {
     }
 
     private function inline_css(): string {
+        // Grid is single-column by default (mobile), 3 fixed columns from
+        // 700px up — matches the theme's own .mv-grid breakpoint
+        // convention, and gives ~300px tiles at a 960px desktop content
+        // width (3 columns, 2 gaps), so the default limit=6 renders as
+        // 2 rows of 3. .geo-related__image uses aspect-ratio instead of a
+        // fixed pixel height so it scales proportionally with that wider
+        // tile width rather than looking stretched.
         return '.geo-related{margin:2em 0}'
-             . '.geo-related__heading{font-size:1.25em;line-height:1.3;margin:0 0 .75em}'
-             . '.geo-related--cta .geo-related__heading{font-weight:700}'
-             . '.geo-related__grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1em;margin:0}'
+             . '.geo-related__heading{margin:0 0 .75em}'
+             . '.geo-related__grid{display:grid;grid-template-columns:1fr;gap:1em;margin:0}'
+             . '@media (min-width:700px){.geo-related__grid{grid-template-columns:repeat(3,minmax(0,1fr))}}'
              . '.geo-related__tile{display:block;text-decoration:none;color:inherit;border-radius:8px;overflow:hidden;background:#f7f7f7}'
-             . '.geo-related__image{display:block;width:100%;height:120px;object-fit:cover}'
+             . '.geo-related__image{display:block;width:100%;aspect-ratio:3/2;object-fit:cover}'
              . '.geo-related__title{display:block;padding:.6em .75em;font-size:.9em;line-height:1.3}'
              . '.geo-related__list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5em}'
              . '.geo-related__list-item a{text-decoration:none}'
