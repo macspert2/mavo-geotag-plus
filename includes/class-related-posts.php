@@ -42,6 +42,12 @@ class RelatedPosts {
     // smaller commitment than a whole tiles section).
     private const MIN_OTHERS = 3;
 
+    // render_full() only: skip the country section once the country has
+    // more posts than this — double the default tile limit (6) felt
+    // like a reasonable line between "these tiles are a representative
+    // sample" and "these tiles are an arbitrary handful out of hundreds".
+    private const MAX_COUNTRY_POSTS = 12;
+
     // Most specific first — auto-cascade and the "full" stack both walk this.
     private const LEVELS_DESC = ['city', 'region', 'country'];
 
@@ -205,6 +211,18 @@ class RelatedPosts {
                 continue;
             }
 
+            // Country only: skip entirely once it has too many posts to
+            // meaningfully represent in a handful of tiles (e.g. France,
+            // with hundreds of posts, next to a focused city/region
+            // section feels arbitrary rather than a real "see more"). Not
+            // applied to city/region — those rarely get large enough for
+            // this to matter, and not applied to render()'s single-section
+            // auto-cascade, where country might be the only level a post
+            // has at all.
+            if ('country' === $try_level && $this->count_posts_for_term($term_id) > self::MAX_COUNTRY_POSTS) {
+                continue;
+            }
+
             $posts = $this->query_related($term_id, $post_id, $limit);
             if (count($posts) < self::MIN_OTHERS) {
                 continue;
@@ -243,16 +261,49 @@ class RelatedPosts {
      * @return \WP_Post[]
      */
     private function query_related(int $term_id, int $exclude_post_id, int $limit): array {
+        // Geo Tagger Core explicitly tags both 'post' and 'page' (e.g.
+        // destination hub pages like /france/ carry the same country
+        // tag as regular posts), and 'post_type' => 'post' below has not
+        // reliably kept them out in practice — confirmed live (/france/,
+        // a real page, appearing as a tile). get_post_type() after the
+        // query is what actually guarantees only real posts render.
+        // Over-fetch a bit so filtering a few pages out doesn't leave
+        // fewer than $limit tiles.
         $query = new \WP_Query([
             'post_type'           => 'post',
             'post_status'         => 'publish',
             'tag__in'             => [$term_id],
             'post__not_in'        => [$exclude_post_id],
-            'posts_per_page'      => $limit,
+            'posts_per_page'      => $limit + 5,
             'ignore_sticky_posts' => true,
             'no_found_rows'       => true,
         ]);
-        return $query->posts;
+
+        $posts = array_filter(
+            $query->posts,
+            static fn( $post ) => 'post' === get_post_type( $post )
+        );
+
+        return array_slice( array_values( $posts ), 0, $limit );
+    }
+
+    /**
+     * Total published 'post'-type count for a term — used to decide
+     * whether the country level is worth a tiles section in
+     * render_full() (a handful of tiles next to hundreds of country
+     * posts would feel arbitrary). Deliberately a real count query
+     * rather than get_term()->count, which would also include any
+     * geo-tagged pages.
+     */
+    private function count_posts_for_term(int $term_id): int {
+        $query = new \WP_Query([
+            'post_type'      => 'post',
+            'post_status'    => 'publish',
+            'tag__in'        => [$term_id],
+            'posts_per_page' => 1,
+            'fields'         => 'ids',
+        ]);
+        return (int) $query->found_posts;
     }
 
     private function render_section(string $level, string $place_name, int $term_id, array $posts, string $lang, string $style): string {
