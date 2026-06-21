@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.30
+ * Version: 1.0.32
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.30');
+define('GEO_TAGGER_VERSION', '1.0.32');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -24,6 +24,7 @@ spl_autoload_register(function (string $class): void {
         'GeoTagger\\PlaceRepository' => 'includes/class-place-repository.php',
         'GeoTagger\\GeoBreadcrumb'        => 'includes/class-geo-breadcrumb.php',
         'GeoTagger\\RelatedPosts'         => 'includes/class-related-posts.php',
+        'GeoTagger\\SearchHierarchy'      => 'includes/class-search-hierarchy.php',
         'GeoTagger\\AdminPage'            => 'admin/class-admin-page.php',
         'GeoTagger\\DuplicateTagManager'  => 'admin/class-duplicate-tag-manager.php',
     ];
@@ -55,9 +56,13 @@ add_action('plugins_loaded', function (): void {
     $related_posts = new GeoTagger\RelatedPosts($place_repo);
     $related_posts->init();
 
+    $search_hierarchy = new GeoTagger\SearchHierarchy($place_repo);
+    $search_hierarchy->init();
+
     // Store instances so the global helper functions can access them
-    $GLOBALS['geo_tagger_breadcrumb']    = $breadcrumb;
-    $GLOBALS['geo_tagger_related_posts'] = $related_posts;
+    $GLOBALS['geo_tagger_breadcrumb']       = $breadcrumb;
+    $GLOBALS['geo_tagger_related_posts']    = $related_posts;
+    $GLOBALS['geo_tagger_search_hierarchy'] = $search_hierarchy;
 
     if (is_admin()) {
         (new GeoTagger\AdminPage($core))->init();
@@ -157,4 +162,27 @@ function geo_tagger_related_posts(int $post_id = 0, ?string $level = null, strin
 function geo_tagger_related_posts_full(int $post_id = 0, string $style = 'plain', int $limit = 6): string {
     $instance = $GLOBALS['geo_tagger_related_posts'] ?? null;
     return $instance ? $instance->render_full($post_id, $style, $limit) : '';
+}
+
+/**
+ * For the search results page: if the search term matches a known
+ * place name (a LIKE match against name_{lang} in geo_tagger_places),
+ * returns links to articles in that place's city, region, and country
+ * — useful since the literal search text might not appear in any
+ * post's title/content at all (e.g. searching "Londres" finds the
+ * city tag archive even for posts that never spell the city name out).
+ *
+ * Requires at least 3 characters in $term; returns '' below that, if
+ * no place matches, or if none of the matched place's levels have
+ * more than 1 post to link to.
+ *
+ * Usage: echo geo_tagger_search_hierarchy( get_search_query(), $lang );
+ *
+ * @param string $term Free-text search term.
+ * @param string $lang 'fr' | 'en' | 'de'.
+ * @return string HTML, or empty string if there's nothing to show.
+ */
+function geo_tagger_search_hierarchy(string $term, string $lang): string {
+    $instance = $GLOBALS['geo_tagger_search_hierarchy'] ?? null;
+    return $instance ? $instance->render($term, $lang) : '';
 }

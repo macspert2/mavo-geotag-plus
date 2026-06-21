@@ -51,20 +51,35 @@ class RelatedPosts {
     // Most specific first — auto-cascade and the "full" stack both walk this.
     private const LEVELS_DESC = ['city', 'region', 'country'];
 
+    // cta_heading is per-level — "plan your trip" framing only makes
+    // sense at the city level; region/country use a plainer "elsewhere
+    // in the same place" framing instead.
     private const STRINGS = [
         'fr' => [
             'heading'     => 'Plus d’articles sur %s',
-            'cta_heading' => 'Préparez votre voyage : %s',
+            'cta_heading' => [
+                'city'    => 'Préparez votre voyage : %s',
+                'region'  => 'Dans la même région : %s',
+                'country' => 'Dans le même pays : %s',
+            ],
             'see_all'     => 'Voir tous les articles sur %s',
         ],
         'en' => [
             'heading'     => 'More about %s',
-            'cta_heading' => 'Plan your trip: %s',
+            'cta_heading' => [
+                'city'    => 'Plan your trip: %s',
+                'region'  => 'In the same region: %s',
+                'country' => 'In the same country: %s',
+            ],
             'see_all'     => 'See all articles about %s',
         ],
         'de' => [
             'heading'     => 'Mehr über %s',
-            'cta_heading' => 'Plant eure Reise: %s',
+            'cta_heading' => [
+                'city'    => 'Plant eure Reise: %s',
+                'region'  => 'In der gleichen Region: %s',
+                'country' => 'Im gleichen Land: %s',
+            ],
             'see_all'     => 'Alle Artikel über %s ansehen',
         ],
     ];
@@ -315,7 +330,10 @@ class RelatedPosts {
         $is_cta     = 'cta' === $style;
         $is_compact = 'compact' === $style;
 
-        $heading = sprintf($is_cta ? $strings['cta_heading'] : $strings['heading'], $place_name);
+        $heading_format = $is_cta
+            ? ($strings['cta_heading'][$level] ?? $strings['heading'])
+            : $strings['heading'];
+        $heading = sprintf($heading_format, $place_name);
 
         $items = '';
         foreach ($posts as $post) {

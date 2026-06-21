@@ -222,6 +222,39 @@ class PlaceRepository {
         return $leaf ? $this->get_place_chain((int) $leaf->id) : [];
     }
 
+    /**
+     * Finds the best-matching place for a free-text term, via a LIKE
+     * match against name_{lang} — for the search-page "geographic
+     * hierarchy" feature (resolve what a visitor typed to a known
+     * place, e.g. "Londres" → the city place named "Londres").
+     *
+     * Ordered by shortest matching name first: a shorter name_{lang}
+     * containing the term is a tighter match than a longer one that
+     * merely happens to contain it as a substring (and naturally
+     * prefers an exact match when one exists). Pure data lookup — no
+     * minimum term length or other business rules here; that's the
+     * caller's job.
+     */
+    public function find_place_by_name(string $term, string $lang): ?object {
+        $term = trim($term);
+        if (!in_array($lang, self::ALLOWED_LANGS, true) || '' === $term) {
+            return null;
+        }
+
+        global $wpdb;
+        $col = 'name_' . $lang;
+
+        return $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM {$wpdb->prefix}geo_tagger_places
+                 WHERE {$col} LIKE %s
+                 ORDER BY CHAR_LENGTH({$col}) ASC
+                 LIMIT 1",
+                '%' . $wpdb->esc_like($term) . '%'
+            )
+        ) ?: null;
+    }
+
     public function find_coord(string $lat_lng_hash): ?int {
         global $wpdb;
         $id = $wpdb->get_var(
