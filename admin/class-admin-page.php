@@ -20,6 +20,7 @@ class AdminPage {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
         add_action('admin_post_geo_tagger_save_settings', [$this, 'save_settings']);
         (new DuplicateTagManager())->init();
+        (new PlaceEditor($this->core->get_place_repo()))->init();
     }
 
     public function register_menu(): void {
@@ -91,6 +92,8 @@ class AdminPage {
             <h1>MaVo GeoTag Plus
                 <a href="<?php echo esc_url(admin_url('tools.php?page=geo-tagger-duplicates')); ?>"
                    class="page-title-action">Duplicate Tag Manager</a>
+                <a href="<?php echo esc_url(admin_url('tools.php?page=geo-tagger-places')); ?>"
+                   class="page-title-action">Place Editor</a>
             </h1>
 
             <?php if ($saved): ?>

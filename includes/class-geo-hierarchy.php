@@ -8,7 +8,11 @@ class GeoHierarchy {
 
     private const LEVEL_KEYS = [
         'city'   => ['city', 'town', 'village', 'hamlet', 'municipality'],
-        'region' => ['state', 'province', 'region'],
+        // 'state'/'province'/'region' cover most countries; 'state_district' and
+        // 'county' are Nominatim's fallback keys for countries whose admin_level
+        // hierarchy doesn't map cleanly onto those three — without them, a region
+        // level silently disappears for those countries instead of appearing here.
+        'region' => ['state', 'province', 'region', 'state_district', 'county'],
     ];
 
     private array $continents;

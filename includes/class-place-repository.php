@@ -302,6 +302,30 @@ class PlaceRepository {
     }
 
     /**
+     * Returns every place row except the singleton 'world' root, for the Place
+     * Editor admin screen (list + parent-picker candidates).
+     *
+     * @return object[]
+     */
+    public function get_all_places(): array {
+        global $wpdb;
+        return $wpdb->get_results(
+            "SELECT * FROM {$wpdb->prefix}geo_tagger_places WHERE level != 'world' ORDER BY level, name_fr"
+        );
+    }
+
+    /**
+     * Updates the editable columns of a place row (level, parent_id, country_code,
+     * names) for the Place Editor admin screen. term_id_* columns are deliberately
+     * not editable here — they're managed by TagManager's term find/create logic.
+     */
+    public function update_place(int $place_id, array $data): bool {
+        global $wpdb;
+        $data['updated_at'] = current_time('mysql');
+        return $wpdb->update("{$wpdb->prefix}geo_tagger_places", $data, ['id' => $place_id]) !== false;
+    }
+
+    /**
      * Returns the full place row whose term_id_fr/en/de matches the given term ID,
      * or null if this term doesn't correspond to a node in the hierarchy.
      */

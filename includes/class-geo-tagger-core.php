@@ -126,4 +126,8 @@ class Core {
     public function get_settings(): array {
         return $this->settings;
     }
+
+    public function get_place_repo(): PlaceRepository {
+        return $this->place_repo;
+    }
 }
