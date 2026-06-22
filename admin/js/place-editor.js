@@ -13,6 +13,7 @@
 
     let places = [];   // last loaded list, used to rebuild parent dropdowns client-side
     let byId   = {};
+    const postsCache = {}; // place_id -> { by_lang } from ajax_posts, kept for the page's lifetime
 
     async function post(action, data) {
         const body = new URLSearchParams({ action, nonce, ...data });
@@ -94,6 +95,10 @@
         tr.dataset.path = p.path.toLowerCase();
         tr.dataset.level = p.level;
 
+        const postsToggleHtml = p.level === 'city'
+            ? '<button class="button button-small gtp-toggle-posts" style="margin-left:4px">Posts</button>'
+            : '';
+
         tr.innerHTML =
             '<td class="gtp-path">' + esc(p.path) + '</td>'
             + '<td><select class="gtp-level">' + levelOptions(p.level) + '</select></td>'
@@ -104,6 +109,7 @@
             + '<td><input class="gtp-name-de" type="text" value="' + esc(p.name_de || '') + '" style="width:100%"></td>'
             + '<td style="font-size:11px;white-space:nowrap">' + tagsHtml(p) + '</td>'
             + '<td><button class="button button-primary button-small gtp-save">Save</button>'
+            + postsToggleHtml
             + '<div class="gtp-status" style="font-size:11px;margin-top:4px"></div></td>';
 
         tr.querySelector('.gtp-level').addEventListener('change', (e) => {
@@ -113,6 +119,11 @@
 
         tr.querySelector('.gtp-save').addEventListener('click', () => saveRow(tr, p.id));
 
+        const toggleBtn = tr.querySelector('.gtp-toggle-posts');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => togglePostsRow(tr, p));
+        }
+
         return tr;
     }
 
@@ -121,6 +132,79 @@
         tbody.innerHTML = '';
         places.forEach(p => tbody.appendChild(renderRow(p)));
         document.getElementById('gtp-count').textContent = places.length + ' place(s)';
+    }
+
+    // -------------------------------------------------------------------------
+    // City-level: list of posts tagged with this place
+    // -------------------------------------------------------------------------
+
+    const LANG_LABELS = { fr: 'FR', en: 'EN', de: 'DE' };
+
+    function postsListHtml(byLang) {
+        const langs = Object.keys(byLang);
+        if (langs.length === 0) {
+            return '<p style="margin:0;color:#888">No language tag is linked to this place yet.</p>';
+        }
+
+        let html = '';
+        let total = 0;
+        langs.forEach(lang => {
+            const posts = byLang[lang];
+            total += posts.length;
+            html += '<strong>' + (LANG_LABELS[lang] || lang) + '</strong> (' + posts.length + ')';
+            if (posts.length === 0) {
+                html += '<p style="margin:2px 0 10px;color:#888">No posts.</p>';
+                return;
+            }
+            html += '<ul style="margin:4px 0 10px;padding-left:18px">';
+            posts.forEach(post => {
+                const statusTag = post.status !== 'publish' ? ' <em style="color:#b32d2e">(' + esc(post.status) + ')</em>' : '';
+                html += '<li>'
+                    + '<a href="' + esc(post.edit_url) + '" target="_blank" rel="noopener">' + esc(post.title) + '</a>'
+                    + statusTag
+                    + ' &nbsp;<a href="' + esc(post.permalink) + '" target="_blank" rel="noopener" style="color:#888">view ↗</a>'
+                    + '</li>';
+            });
+            html += '</ul>';
+        });
+
+        if (total === 0) {
+            html = '<p style="margin:0;color:#888">No posts are tagged with this place yet.</p>' + html;
+        }
+        return html;
+    }
+
+    async function togglePostsRow(tr, p) {
+        const existing = tr.nextElementSibling;
+        if (existing && existing.classList.contains('gtp-posts-row')) {
+            existing.remove();
+            return;
+        }
+
+        // Close any other open posts row — keeps the table from growing unbounded.
+        document.querySelectorAll('.gtp-posts-row').forEach(row => row.remove());
+
+        const postsRow = document.createElement('tr');
+        postsRow.className = 'gtp-posts-row';
+        const cell = document.createElement('td');
+        cell.colSpan = 9;
+        cell.style.background = '#f6f7f7';
+        cell.style.padding = '10px 16px';
+        cell.textContent = 'Loading posts…';
+        cell.style.color = '#888';
+        postsRow.appendChild(cell);
+        tr.after(postsRow);
+
+        try {
+            if (!postsCache[p.id]) {
+                postsCache[p.id] = await post('geo_tagger_place_posts', { place_id: p.id });
+            }
+            cell.style.color = '';
+            cell.innerHTML = postsListHtml(postsCache[p.id].by_lang);
+        } catch (err) {
+            cell.style.color = '#991b1b';
+            cell.textContent = 'Error loading posts: ' + err.message;
+        }
     }
 
     async function saveRow(tr, placeId) {

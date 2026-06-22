@@ -44,6 +44,7 @@ class PlaceEditor {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_scripts']);
         add_action('wp_ajax_geo_tagger_place_list',   [$this, 'ajax_list']);
         add_action('wp_ajax_geo_tagger_place_update', [$this, 'ajax_update']);
+        add_action('wp_ajax_geo_tagger_place_posts',  [$this, 'ajax_posts']);
     }
 
     public function register_menu(): void {
@@ -266,5 +267,59 @@ class PlaceEditor {
         }
 
         wp_send_json_success(['place_id' => $place_id]);
+    }
+
+    // -------------------------------------------------------------------------
+    // AJAX: posts tagged with a city's term(s)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Lists the posts tagged with a city place's term_id_fr/en/de — each
+     * language is queried separately since Polylang gives every language
+     * its own distinct post_tag term. City-only: regions/countries can have
+     * far too many posts for this to stay a quick on-demand lookup, and the
+     * editor's main use is sanity-checking the leaf level a post landed on.
+     */
+    public function ajax_posts(): void {
+        check_ajax_referer('geo_tagger_place_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => 'Forbidden'], 403);
+        }
+
+        $place_id = absint($_POST['place_id'] ?? 0);
+        $place    = $place_id ? $this->place_repo->get_place($place_id) : null;
+
+        if (!$place || $place->level !== 'city') {
+            wp_send_json_error(['message' => 'Posts are only listed for city-level places.']);
+        }
+
+        $by_lang = [];
+        foreach (['fr', 'en', 'de'] as $lang) {
+            $term_id = (int) ($place->{'term_id_' . $lang} ?? 0);
+            if (!$term_id) {
+                continue;
+            }
+
+            $posts = get_posts([
+                'tag_id'         => $term_id,
+                'post_type'      => 'post',
+                'post_status'    => ['publish', 'draft', 'pending', 'future'],
+                'posts_per_page' => 100,
+                'orderby'        => 'date',
+                'order'          => 'DESC',
+            ]);
+
+            $by_lang[$lang] = array_map(static function ($post) {
+                return [
+                    'id'        => $post->ID,
+                    'title'     => get_the_title($post) ?: '(no title)',
+                    'status'    => $post->post_status,
+                    'edit_url'  => get_edit_post_link($post->ID, 'raw'),
+                    'permalink' => get_permalink($post->ID),
+                ];
+            }, $posts);
+        }
+
+        wp_send_json_success(['by_lang' => $by_lang]);
     }
 }
