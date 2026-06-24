@@ -283,6 +283,60 @@ class AdminPage {
                 background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:12px;
                 padding:10px;border-radius:4px">
             </div>
+
+            <!-- Shortcodes -->
+            <h2>Shortcodes</h2>
+            <p>Use these in post/page content — e.g. via the block editor's "Shortcode" block.</p>
+            <table class="widefat" style="max-width:900px">
+                <thead>
+                    <tr>
+                        <th style="width:220px">Shortcode</th>
+                        <th>What it does</th>
+                        <th style="width:320px">Attributes (all optional)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>[geo_breadcrumb]</code></td>
+                        <td>Geographic breadcrumb: Home › Continent › Country › Region › City.</td>
+                        <td><code>post_id</code> — defaults to the current post.</td>
+                    </tr>
+                    <tr>
+                        <td><code>[geo_related]</code></td>
+                        <td>
+                            "More about {place}" tiles. Auto-picks the most specific level
+                            (city → region → country) that has enough other posts, unless
+                            <code>level</code> forces one.
+                        </td>
+                        <td>
+                            <code>post_id</code> — defaults to the current post.<br>
+                            <code>level</code> = <code>city</code> | <code>region</code> | <code>country</code> — default: auto.<br>
+                            <code>style</code> = <code>plain</code> | <code>cta</code> | <code>compact</code> — default: <code>plain</code>.<br>
+                            <code>limit</code> — max tiles. Default: 6.
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>[geo_related_full]</code></td>
+                        <td>
+                            Same as <code>[geo_related]</code>, but stacks a section for every
+                            level that has enough posts, most specific first, instead of stopping
+                            at the first one.
+                        </td>
+                        <td>
+                            <code>post_id</code> — defaults to the current post.<br>
+                            <code>style</code> = <code>plain</code> | <code>cta</code> | <code>compact</code> — default: <code>plain</code>.<br>
+                            <code>limit</code> — max tiles per section. Default: 6.
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="description">
+                Equivalent PHP functions are also available for theme templates (e.g. for
+                automatic placement on every post without editing content) — see the docblocks
+                in <code>mavo-geotag-plus.php</code>: <code>geo_tagger_breadcrumb()</code>,
+                <code>geo_tagger_term_breadcrumb()</code>, <code>geo_tagger_related_posts()</code>,
+                <code>geo_tagger_related_posts_full()</code>, <code>geo_tagger_search_hierarchy()</code>.
+            </p>
         </div>
         <?php
     }
