@@ -184,7 +184,12 @@ class RelatedPosts {
             $posts = $this->query_related($term_id, $post_id, $limit);
 
             if ($level || count($posts) >= self::MIN_OTHERS) {
-                return $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style);
+                $place_name_fr = (string) ($place->name_fr ?? '');
+                $place_label   = function_exists('mv_normalize_geo_label')
+                    ? mv_normalize_geo_label($place_name_fr)
+                    : $place_name_fr;
+                $current_geo   = ['type' => $try_level, 'slug' => sanitize_title($place_label)];
+                return $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style, $current_geo);
             }
         }
 
@@ -243,7 +248,12 @@ class RelatedPosts {
                 continue;
             }
 
-            $sections .= $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style);
+            $place_name_fr = (string) ($place->name_fr ?? '');
+            $place_label   = function_exists('mv_normalize_geo_label')
+                ? mv_normalize_geo_label($place_name_fr)
+                : $place_name_fr;
+            $current_geo   = ['type' => $try_level, 'slug' => sanitize_title($place_label)];
+            $sections .= $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style, $current_geo);
         }
 
         return $sections;
@@ -321,7 +331,7 @@ class RelatedPosts {
         return (int) $query->found_posts;
     }
 
-    private function render_section(string $level, string $place_name, int $term_id, array $posts, string $lang, string $style): string {
+    private function render_section(string $level, string $place_name, int $term_id, array $posts, string $lang, string $style, ?array $current_geo = null): string {
         if (empty($posts)) {
             return '';
         }
@@ -337,7 +347,7 @@ class RelatedPosts {
 
         $items = '';
         foreach ($posts as $post) {
-            $items .= $is_compact ? $this->render_list_item($post) : $this->render_tile($post);
+            $items .= $is_compact ? $this->render_list_item($post) : $this->render_tile($post, $current_geo);
         }
 
         $see_all_url = get_term_link($term_id, 'post_tag');
@@ -366,12 +376,22 @@ class RelatedPosts {
         );
     }
 
-    private function render_tile(\WP_Post $post): string {
-        $image = get_the_post_thumbnail($post, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
+    private function render_tile(\WP_Post $post, ?array $current_geo = null): string {
+        $image  = get_the_post_thumbnail($post, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
+        $badges = '';
+        if ( function_exists('mv_tile_badges') ) {
+            $badge_args = ['context' => 'article_related', 'limit' => 1];
+            if ($current_geo) {
+                $badge_args['current_geo'] = $current_geo;
+            }
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+            $badges = mv_tile_badges($post->ID, $badge_args);
+        }
         return sprintf(
-            '<a class="geo-related__tile" href="%s">%s<span class="geo-related__title">%s</span></a>',
+            '<a class="geo-related__tile" href="%s">%s%s<span class="geo-related__title">%s</span></a>',
             esc_url(get_permalink($post)),
             $image ?: '',
+            $badges,
             esc_html(get_the_title($post))
         );
     }
@@ -402,6 +422,8 @@ class RelatedPosts {
              . '.geo-related__list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5em}'
              . '.geo-related__list-item a{text-decoration:none}'
              . '.geo-related__list-item a:hover{text-decoration:underline}'
-             . '.geo-related__more{margin:1em 0 0;font-size:.9em}';
+             . '.geo-related__more{margin:1em 0 0;font-size:.9em}'
+             . '.geo-related__tile .mv-tile__badges{padding:.45em .75em .1em;gap:.3rem;margin:0}'
+             . '.geo-related__tile .mv-badge{min-height:1.3rem;padding:.1rem .48rem;font-size:.72rem}';
     }
 }
