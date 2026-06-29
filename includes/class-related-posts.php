@@ -380,7 +380,7 @@ class RelatedPosts {
         $image  = get_the_post_thumbnail($post, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
         $badges = '';
         if ( function_exists('mv_tile_badges') ) {
-            $badge_args = ['context' => 'article_related', 'limit' => 1];
+            $badge_args = ['context' => 'article_related', 'limit' => 1, 'link_badges' => true];
             if ($current_geo) {
                 $badge_args['current_geo'] = $current_geo;
             }
@@ -388,10 +388,10 @@ class RelatedPosts {
             $badges = mv_tile_badges($post->ID, $badge_args);
         }
         return sprintf(
-            '<a class="geo-related__tile" href="%s">%s%s<span class="geo-related__title">%s</span></a>',
-            esc_url(get_permalink($post)),
+            '<div class="geo-related__tile">%s%s<span class="geo-related__title"><a class="geo-related__link" href="%s">%s</a></span></div>',
             $image ?: '',
             $badges,
+            esc_url(get_permalink($post)),
             esc_html(get_the_title($post))
         );
     }
@@ -416,14 +416,16 @@ class RelatedPosts {
              . '.geo-related__heading{margin:0 0 .75em}'
              . '.geo-related__grid{display:grid;grid-template-columns:1fr;gap:1em;margin:0}'
              . '@media (min-width:700px){.geo-related__grid{grid-template-columns:repeat(3,minmax(0,1fr))}}'
-             . '.geo-related__tile{display:block;text-decoration:none;color:inherit;border-radius:8px;overflow:hidden;background:#f7f7f7}'
+             . '.geo-related__tile{display:block;border-radius:8px;overflow:hidden;background:#f7f7f7;position:relative;isolation:isolate}'
              . '.geo-related__image{display:block;width:100%;aspect-ratio:3/2;object-fit:cover}'
              . '.geo-related__title{display:block;padding:.6em .75em;font-size:.9em;line-height:1.3}'
+             . '.geo-related__link{color:inherit;text-decoration:none}'
+             . '.geo-related__link::after{content:\'\';position:absolute;inset:0;z-index:0}'
              . '.geo-related__list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5em}'
              . '.geo-related__list-item a{text-decoration:none}'
              . '.geo-related__list-item a:hover{text-decoration:underline}'
              . '.geo-related__more{margin:1em 0 0;font-size:.9em}'
-             . '.geo-related__tile .mv-tile__badges{padding:.45em .75em .1em;gap:.3rem;margin:0}'
+             . '.geo-related__tile .mv-tile__badges{position:relative;z-index:1;padding:.45em .75em .1em;gap:.3rem;margin:0}'
              . '.geo-related__tile .mv-badge{min-height:1.3rem;padding:.1rem .48rem;font-size:.72rem}';
     }
 }
