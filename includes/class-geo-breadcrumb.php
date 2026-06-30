@@ -60,7 +60,7 @@ class GeoBreadcrumb {
              .     'gap:.15em;line-height:2;'
              .     'font-size:.8125em;color:#767676;'
              . '}'
-             . '.geo-breadcrumb a{color:inherit;text-decoration:none}'
+             . '.geo-breadcrumb a{color:var(--accent);text-decoration:none}'
              . '.geo-breadcrumb a:hover,'
              . '.geo-breadcrumb a:focus{text-decoration:underline}'
              . '.geo-breadcrumb__full{'

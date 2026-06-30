@@ -380,7 +380,7 @@ class RelatedPosts {
         $image  = get_the_post_thumbnail($post, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
         $badges = '';
         if ( function_exists('mv_tile_badges') ) {
-            $badge_args = ['context' => 'article_related', 'limit' => 1, 'link_badges' => true];
+            $badge_args = ['context' => 'article_related', 'limit' => 1];
             if ($current_geo) {
                 $badge_args['current_geo'] = $current_geo;
             }
