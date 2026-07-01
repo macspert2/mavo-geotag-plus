@@ -345,9 +345,10 @@ class RelatedPosts {
             : $strings['heading'];
         $heading = sprintf($heading_format, $place_name);
 
-        $items = '';
+        $items      = '';
+        $badge_seen = [];
         foreach ($posts as $post) {
-            $items .= $is_compact ? $this->render_list_item($post) : $this->render_tile($post, $current_geo);
+            $items .= $is_compact ? $this->render_list_item($post) : $this->render_tile($post, $current_geo, $badge_seen);
         }
 
         $see_all_url = get_term_link($term_id, 'post_tag');
@@ -376,16 +377,22 @@ class RelatedPosts {
         );
     }
 
-    private function render_tile(\WP_Post $post, ?array $current_geo = null): string {
+    private function render_tile(\WP_Post $post, ?array $current_geo = null, array &$badge_seen = []): string {
         $image  = get_the_post_thumbnail($post, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
         $badges = '';
-        if ( function_exists('mv_tile_badges') ) {
-            $badge_args = ['context' => 'article_related', 'limit' => 1];
+        if ( function_exists('mv_get_tile_badges') ) {
+            $badge_args = [
+                'context'     => 'geo_hub',
+                'limit'       => 2,
+                'seen_labels' => $badge_seen,
+            ];
             if ($current_geo) {
                 $badge_args['current_geo'] = $current_geo;
             }
+            $resolved = mv_get_tile_badges( $post->ID, $badge_args );
+            mv_badges_update_seen( $badge_seen, $resolved );
             // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-            $badges = mv_tile_badges($post->ID, $badge_args);
+            $badges = mv_render_tile_badges( $resolved, $badge_args );
         }
         return sprintf(
             '<div class="geo-related__tile">%s%s<span class="geo-related__title"><a class="geo-related__link" href="%s">%s</a></span></div>',
