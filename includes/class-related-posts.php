@@ -343,7 +343,13 @@ class RelatedPosts {
         $heading_format = $is_cta
             ? ($strings['cta_heading'][$level] ?? $strings['heading'])
             : $strings['heading'];
-        $heading = sprintf($heading_format, $place_name);
+
+        // For country level, link the place name to its hub page if one exists.
+        $hub_url      = 'country' === $level ? $this->country_hub_url( $current_geo ) : null;
+        $place_markup = $hub_url
+            ? '<a href="' . esc_url( $hub_url ) . '" class="geo-related__place-link">' . esc_html( $place_name ) . '</a>'
+            : esc_html( $place_name );
+        $heading_html = sprintf( esc_html( $heading_format ), $place_markup );
 
         $items      = '';
         $badge_seen = [];
@@ -368,13 +374,29 @@ class RelatedPosts {
             '<div class="geo-related geo-related--%s geo-related--%s"><h2 class="geo-related__heading">%s</h2><%s class="%s">%s</%s>%s</div>',
             esc_attr($level),
             esc_attr($style),
-            esc_html($heading),
+            $heading_html,
             $list_tag,
             $list_class,
             $items,
             $list_tag,
             $see_all
         );
+    }
+
+    /**
+     * Returns the permalink of a hub page whose slug matches the geo's French
+     * slug, or null if no published page exists at that path.
+     */
+    private function country_hub_url( ?array $current_geo ): ?string {
+        $slug = $current_geo['slug'] ?? '';
+        if ( '' === $slug ) {
+            return null;
+        }
+        $page = get_page_by_path( $slug );
+        if ( ! $page || 'publish' !== get_post_status( $page ) ) {
+            return null;
+        }
+        return get_permalink( $page ) ?: null;
     }
 
     private function render_tile(\WP_Post $post, ?array $current_geo = null, array &$badge_seen = []): string {
@@ -432,6 +454,8 @@ class RelatedPosts {
              . '.geo-related__list-item a{text-decoration:none}'
              . '.geo-related__list-item a:hover{text-decoration:underline}'
              . '.geo-related__more{margin:1em 0 0;font-size:.9em}'
+             . '.geo-related__place-link{color:inherit;text-decoration:underline;text-underline-offset:3px}'
+             . '.geo-related__place-link:hover{opacity:.8}'
              . '.geo-related__tile .mv-tile__badges{position:relative;z-index:1;padding:.45em .75em .1em;gap:.3rem;margin:0}'
              . '.geo-related__tile .mv-badge{min-height:1.3rem;padding:.1rem .48rem;font-size:.72rem}';
     }
