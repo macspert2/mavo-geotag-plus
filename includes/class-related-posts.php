@@ -344,8 +344,8 @@ class RelatedPosts {
             ? ($strings['cta_heading'][$level] ?? $strings['heading'])
             : $strings['heading'];
 
-        // For country level, link the place name to its hub page if one exists.
-        $hub_url      = 'country' === $level ? $this->country_hub_url( $current_geo ) : null;
+        // For country level, link the place name to its hub page if one exists in the current language.
+        $hub_url      = 'country' === $level ? $this->country_hub_url( $current_geo, $lang ) : null;
         $place_markup = $hub_url
             ? '<a href="' . esc_url( $hub_url ) . '" class="geo-related__place-link">' . esc_html( $place_name ) . '</a>'
             : esc_html( $place_name );
@@ -384,10 +384,14 @@ class RelatedPosts {
     }
 
     /**
-     * Returns the permalink of a hub page whose slug matches the geo's French
-     * slug, or null if no published page exists at that path.
+     * Returns the permalink of the hub page for this country in the given language,
+     * or null if no published page exists (avoids linking a DE/EN post to a French hub).
+     *
+     * Hub pages live at French slugs (e.g. /france/). For non-French languages,
+     * Polylang is used to resolve the translated version; if no translation exists,
+     * null is returned so the heading falls back to plain text.
      */
-    private function country_hub_url( ?array $current_geo ): ?string {
+    private function country_hub_url( ?array $current_geo, string $lang = 'fr' ): ?string {
         $slug = $current_geo['slug'] ?? '';
         if ( '' === $slug ) {
             return null;
@@ -395,6 +399,14 @@ class RelatedPosts {
         $page = get_page_by_path( $slug );
         if ( ! $page || 'publish' !== get_post_status( $page ) ) {
             return null;
+        }
+        // For non-French posts, require a Polylang translation in the current language.
+        if ( 'fr' !== $lang && function_exists( 'pll_get_post' ) ) {
+            $translated_id = (int) pll_get_post( $page->ID, $lang );
+            if ( ! $translated_id || 'publish' !== get_post_status( $translated_id ) ) {
+                return null;
+            }
+            return get_permalink( $translated_id ) ?: null;
         }
         return get_permalink( $page ) ?: null;
     }
