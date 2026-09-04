@@ -10,6 +10,18 @@ class NominatimClient {
     private const TRANSIENT_PREFIX    = 'geo_tagger_nom_';
     private const RATE_LIMIT_TRANSIENT = 'geo_tagger_last_nominatim_request';
 
+    /**
+     * How long an incomplete lookup stays cached.
+     *
+     * Nominatim is a free, best-effort service: it throttles, and it has
+     * outages, and fetch() returns null for whatever it could not answer.
+     * Those nulls used to be cached for the full cache_days alongside the
+     * successful languages, so a single bad minute left a post untagged for a
+     * month with no retry. Anything short of a complete answer is now kept
+     * only long enough to avoid hammering a struggling endpoint.
+     */
+    private const FAILURE_TTL = 15 * MINUTE_IN_SECONDS;
+
     private array $settings;
 
     public function __construct(array $settings) {
@@ -21,21 +33,46 @@ class NominatimClient {
         $cached    = get_transient($cache_key);
 
         if ($cached !== false) {
-            return $cached;
+            // A cached [] is the "Nominatim gave us nothing" marker written
+            // below; normalise it back to null for the caller.
+            return $cached ?: null;
         }
 
         $languages = ['fr', 'en', 'de'];
         $result    = [];
 
-        foreach ($languages as $i => $lang) {
-            if ($i > 0) {
-                $this->rate_limit();
-            }
+        // Spacing is applied before every request, first one included: the
+        // timestamp fetch() records outlives this call (see RATE_LIMIT
+        // transient), so consecutive lookups — a batch run, or two cron events
+        // firing back to back — would otherwise fire their opening request
+        // with no gap at all and exceed Nominatim's 1 req/s policy.
+        foreach ($languages as $lang) {
+            $this->rate_limit();
             $data = $this->fetch($lat, $lng, $lang);
             $result[$lang] = $data;
         }
 
-        $ttl = absint($this->settings['cache_days'] ?? 30) * DAY_IN_SECONDS;
+        $resolved = array_filter($result);
+
+        if (!$resolved) {
+            // Every language failed. Returning $result here would hand the
+            // caller ['fr' => null, 'en' => null, 'de' => null] — a non-empty
+            // array, so Core::tag_single_post()'s `if (!$geo_data)` check
+            // passed and it ran a full tagging pass over empty data, tagging
+            // nothing but still treating the location as resolved. Return
+            // null so it bails, and keep the failure only briefly so the next
+            // save re-tries instead of waiting out cache_days.
+            set_transient($cache_key, [], self::FAILURE_TTL);
+            return null;
+        }
+
+        // A partial answer is still worth using — it tags what it can — but it
+        // must not be cached as if it were the final word on this coordinate.
+        $complete = count($resolved) === count($languages);
+        $ttl      = $complete
+            ? absint($this->settings['cache_days'] ?? 30) * DAY_IN_SECONDS
+            : self::FAILURE_TTL;
+
         set_transient($cache_key, $result, $ttl);
 
         return $result;
@@ -126,6 +163,11 @@ class NominatimClient {
         return $data;
     }
 
+    /**
+     * Sleeps until at least rate_limit_ms has passed since the last request
+     * this site made to Nominatim. No-op when the timestamp has expired (the
+     * transient lives 60s), so an isolated lookup never waits.
+     */
     private function rate_limit(): void {
         $last = (float) get_transient(self::RATE_LIMIT_TRANSIENT);
         if (!$last) {

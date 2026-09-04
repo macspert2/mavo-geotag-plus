@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.35
+ * Version: 1.0.36
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.35');
+define('GEO_TAGGER_VERSION', '1.0.36');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -36,6 +36,13 @@ spl_autoload_register(function (string $class): void {
 
 register_activation_hook(__FILE__, function (): void {
     GeoTagger\PlaceRepository::install();
+});
+
+// Tagging runs on a single-event cron hook (see Core::schedule_tagging()), so
+// any post saved shortly before deactivation would otherwise leave a pending
+// event pointing at a hook nothing listens to any more.
+register_deactivation_hook(__FILE__, function (): void {
+    wp_unschedule_hook(GeoTagger\Core::CRON_HOOK);
 });
 
 add_action('plugins_loaded', function (): void {
