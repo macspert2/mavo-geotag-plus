@@ -65,45 +65,144 @@ class Core {
     public function on_save_post(int $post_id, \WP_Post $post): void {
         if (wp_is_post_autosave($post_id))  return;
         if (wp_is_post_revision($post_id))  return;
-        if ($post->post_status === 'trash') return;
-        if (!in_array($post->post_type, ['post', 'page'], true)) return;
+        if (!$this->is_taggable($post))     return;
 
-        $this->schedule_tagging($post_id);
+        $this->tag_now_or_schedule($post_id);
     }
 
     public function on_geo_mashup_location_saved(int $location_id, string $object_name, int $object_id): void {
         if ($object_name !== 'post') return;
 
-        $this->schedule_tagging($object_id);
+        $post = get_post($object_id);
+        if (!$post instanceof \WP_Post) return;
+        if (!$this->is_taggable($post))  return;
+
+        // Geo Mashup has just written the location row, so unlike save_post
+        // this hook is guaranteed to see it — which is exactly what the fast
+        // path needs to run inline.
+        $this->tag_now_or_schedule($object_id);
     }
 
     /**
-     * Queues one tagging run for $post_id instead of geocoding inline.
+     * Shared eligibility test for both entry points and for the cron
+     * callback, which re-runs it because the post can change during the
+     * delay window.
      *
-     * tag_single_post() can cost three blocking Nominatim requests (one per
-     * language, 10s timeout each, ~1.1s of rate-limit sleep between them),
-     * which has no business happening inside the editor's save request: the
-     * free Nominatim instance periodically stalls, and the block editor
-     * splits one save across several requests, so the same post could pay
-     * that cost more than once and leave the editor spinning for a minute.
+     * 'auto-draft' is the empty shell WordPress creates the moment you click
+     * Add New. It fires save_post with no content and no location, so
+     * queueing it only burns the event on a guaranteed no-op — and, because
+     * schedule_tagging() treats a pending event as "already handled", that
+     * wasted event used to suppress the queueing of the real save behind it.
+     */
+    private function is_taggable(\WP_Post $post): bool {
+        if (in_array($post->post_status, ['auto-draft', 'trash'], true)) {
+            return false;
+        }
+
+        return in_array($post->post_type, ['post', 'page'], true);
+    }
+
+    /**
+     * Tags inline when that costs nothing, and defers only when it doesn't.
      *
-     * This also replaces the old GEO_TAGGER_PROCESSING constant guard, which
-     * only deduplicated within a single PHP request — useless against the
-     * editor's separate REST calls. Deduplication now happens across
-     * requests, both via the wp_next_scheduled() check here and via
-     * WordPress's own refusal to schedule a duplicate hook+args event within
-     * ten minutes.
+     * Deferring exists to keep three blocking Nominatim requests (one per
+     * language, 10s timeout each, ~1.1s of rate-limit sleep between them) out
+     * of the editor's save request. That cost is real, but it belongs solely
+     * to the slow path: once a coordinate is in the coord index, tagging is a
+     * handful of primary-key lookups and one wp_set_post_terms() call, with no
+     * HTTP at all. Deferring that bought nothing and cost the editor its only
+     * feedback — the Tags metabox is rendered when the edit screen loads, so
+     * terms attached by a later cron run stay invisible until a manual reload,
+     * which reads exactly like tagging having silently failed.
+     *
+     * So: try the fast path here, and fall through to cron only for
+     * coordinates that genuinely need geocoding.
+     */
+    private function tag_now_or_schedule(int $post_id): void {
+        if ($this->try_immediate_tagging($post_id)) {
+            // Nothing left for cron to do; drop any event queued by an
+            // earlier save so it doesn't re-run the same work.
+            $this->unschedule_tagging($post_id);
+            return;
+        }
+
+        $this->schedule_tagging($post_id);
+    }
+
+    /**
+     * Runs the no-HTTP tagging path, or reports that it isn't available.
+     *
+     * Returns false — leaving the caller to queue a cron event — when the
+     * location or post language isn't readable yet (save_post can fire before
+     * Geo Mashup writes its row) or when the coordinates have never been
+     * geocoded, which is the one case that needs Nominatim.
+     */
+    private function try_immediate_tagging(int $post_id): bool {
+        $ctx = $this->resolve_location($post_id);
+        if (!$ctx) {
+            return false;
+        }
+
+        $leaf_place_id = $this->place_repo->find_coord($ctx['hash']);
+        if (!$leaf_place_id) {
+            return false;
+        }
+
+        $this->tag_manager->attach_from_place_chain($post_id, $leaf_place_id, $ctx['lang']);
+        $this->breadcrumb->sync_post_cache($post_id);
+
+        return true;
+    }
+
+    /**
+     * Queues one tagging run for $post_id.
+     *
+     * Deduplication happens across requests here (the old
+     * GEO_TAGGER_PROCESSING constant only ever deduplicated within a single
+     * PHP request, which is useless against the editor's separate REST
+     * calls) — but only a genuinely *future* event counts as "already
+     * handled". A timestamp in the past is not proof that a run is coming:
+     * with DISABLE_WP_CRON set and a system cron that never fires, or after a
+     * fatal in an earlier run, the entry sits in the cron array for ever, and
+     * treating it as pending would silently suppress every later save's
+     * retry. Such an event is cleared and re-queued instead, which also gets
+     * past core's refusal to schedule a duplicate hook+args event within ten
+     * minutes of an existing one.
      */
     private function schedule_tagging(int $post_id): void {
         $args = [$post_id];
+        $next = wp_next_scheduled(self::CRON_HOOK, $args);
 
-        if (wp_next_scheduled(self::CRON_HOOK, $args)) {
+        if ($next && $next > time()) {
             return;
+        }
+
+        if ($next) {
+            wp_unschedule_event($next, self::CRON_HOOK, $args);
         }
 
         $delay = (int) apply_filters('geo_tagger_cron_delay', self::CRON_DELAY, $post_id);
 
         wp_schedule_single_event(time() + $delay, self::CRON_HOOK, $args);
+    }
+
+    /**
+     * Drops every queued tagging event for $post_id. Bounded rather than a
+     * while loop: wp_unschedule_event() can fail, and spinning on an entry
+     * that refuses to clear would hang the save request.
+     */
+    private function unschedule_tagging(int $post_id): void {
+        $args = [$post_id];
+
+        for ($i = 0; $i < 5; $i++) {
+            $next = wp_next_scheduled(self::CRON_HOOK, $args);
+            if (!$next) {
+                return;
+            }
+            if (!wp_unschedule_event($next, self::CRON_HOOK, $args)) {
+                return;
+            }
+        }
     }
 
     /**
@@ -115,39 +214,60 @@ class Core {
     public function run_scheduled_tagging(int $post_id): void {
         $post = get_post($post_id);
 
-        if (!$post instanceof \WP_Post)                            return;
-        if ($post->post_status === 'trash')                        return;
-        if (!in_array($post->post_type, ['post', 'page'], true))   return;
+        if (!$post instanceof \WP_Post) return;
+        if (!$this->is_taggable($post))  return;
 
         $this->tag_single_post($post_id);
     }
 
-    public function tag_single_post(int $post_id): array {
+    /**
+     * Reads the three things every tagging path needs, or null if any of them
+     * isn't available yet. Shared so the inline and cron paths derive the
+     * coordinate hash identically — it is an md5 of the float-to-string form
+     * of the coordinates, so two spellings of the same computation would index
+     * the same spot under two different hashes.
+     *
+     * @return array{lang:string,lat:float,lng:float,hash:string}|null
+     */
+    private function resolve_location(int $post_id): ?array {
         $location = $this->geo_mashup_db->get_location_for_post($post_id);
         if (!$location || empty($location->lat) || empty($location->lng)) {
-            return [];
+            return null;
         }
 
         $lang = $this->polylang->get_post_language($post_id);
         if (!$lang) {
+            return null;
+        }
+
+        $lat = (float) $location->lat;
+        $lng = (float) $location->lng;
+
+        return [
+            'lang' => $lang,
+            'lat'  => $lat,
+            'lng'  => $lng,
+            'hash' => md5("{$lat},{$lng}"),
+        ];
+    }
+
+    public function tag_single_post(int $post_id): array {
+        $ctx = $this->resolve_location($post_id);
+        if (!$ctx) {
             return [];
         }
 
-        $lat  = (float) $location->lat;
-        $lng  = (float) $location->lng;
-        $hash = md5("{$lat},{$lng}");
-
         // Fast path: coordinates already resolved to a place node
-        $leaf_place_id = $this->place_repo->find_coord($hash);
+        $leaf_place_id = $this->place_repo->find_coord($ctx['hash']);
         if ($leaf_place_id) {
-            $summary = $this->tag_manager->attach_from_place_chain($post_id, $leaf_place_id, $lang);
+            $summary = $this->tag_manager->attach_from_place_chain($post_id, $leaf_place_id, $ctx['lang']);
         } else {
             // Slow path: geocode (transient cache → Nominatim)
-            $geo_data = $this->nominatim->reverse_geocode($lat, $lng);
+            $geo_data = $this->nominatim->reverse_geocode($ctx['lat'], $ctx['lng']);
             if (!$geo_data) {
                 return [];
             }
-            $summary = $this->tag_manager->apply_geo_tags($post_id, $geo_data, $lang, $hash);
+            $summary = $this->tag_manager->apply_geo_tags($post_id, $geo_data, $ctx['lang'], $ctx['hash']);
         }
 
         // Only rewrites cached breadcrumb postmeta when the resolved location
@@ -160,15 +280,16 @@ class Core {
     /**
      * Removes the coord_index entry for a post's location so the next call to
      * tag_single_post() takes the slow path and re-applies any missing tags.
-     * Returns false if the post has no Geo Mashup location.
+     * Returns false when there is nothing to clear — no Geo Mashup location,
+     * or no post language, which are the same two conditions that would make
+     * the re-tag it is clearing for a no-op anyway.
      */
     public function clear_coord_for_post(int $post_id): bool {
-        $location = $this->geo_mashup_db->get_location_for_post($post_id);
-        if (!$location || empty($location->lat) || empty($location->lng)) {
+        $ctx = $this->resolve_location($post_id);
+        if (!$ctx) {
             return false;
         }
-        $hash = md5((float) $location->lat . ',' . (float) $location->lng);
-        $this->place_repo->delete_coord($hash);
+        $this->place_repo->delete_coord($ctx['hash']);
         return true;
     }
 
