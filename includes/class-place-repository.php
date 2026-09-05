@@ -175,6 +175,47 @@ class PlaceRepository {
     }
 
     /**
+     * Narrows a list of post_tag term IDs to the ones this plugin owns —
+     * those referenced by any language column of geo_tagger_places.
+     *
+     * Language-agnostic on purpose: it answers "did the geo-tagger attach
+     * this term?", which must stay true even for a term whose language no
+     * longer matches the post it is on.
+     *
+     * @param int[] $term_ids
+     * @return int[] The subset that are geo place terms.
+     */
+    public function filter_geo_term_ids(array $term_ids): array {
+        $term_ids = array_values(array_unique(array_filter(array_map('intval', $term_ids))));
+        if (!$term_ids) {
+            return [];
+        }
+
+        global $wpdb;
+
+        $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
+        $table        = "{$wpdb->prefix}geo_tagger_places";
+
+        // One pass per language column, each reduced to the ids that matched,
+        // so the result contains term ids rather than place rows.
+        $found = [];
+        foreach (self::ALLOWED_LANGS as $lang) {
+            $col  = 'term_id_' . $lang;
+            $rows = $wpdb->get_col(
+                $wpdb->prepare(
+                    "SELECT {$col} FROM {$table} WHERE {$col} IN ($placeholders)",
+                    ...$term_ids
+                )
+            );
+            foreach ($rows ?: [] as $id) {
+                $found[(int) $id] = true;
+            }
+        }
+
+        return array_keys($found);
+    }
+
+    /**
      * Resolves a post to its full geographic place chain (continent → leaf),
      * via whichever of its post_tag terms is the deepest geo tag it carries
      * (city > region > country > continent). Moved here from GeoBreadcrumb

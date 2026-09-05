@@ -39,6 +39,13 @@ class Core {
     private GeoBreadcrumb   $breadcrumb;
     private array           $settings;
 
+    /**
+     * Geo term ids a post carried when the current request started, keyed by
+     * post id. Captured on pre_post_update, consumed on save_post. See
+     * remember_geo_tags() for why.
+     */
+    private array $preserved_geo_tags = [];
+
     public function __construct() {
         $saved          = get_option('geo_tagger_settings', []);
         $this->settings = wp_parse_args($saved, self::DEFAULT_SETTINGS);
@@ -57,6 +64,7 @@ class Core {
     }
 
     public function init(): void {
+        add_action('pre_post_update',           [$this, 'remember_geo_tags'], 10, 1);
         add_action('save_post',                 [$this, 'on_save_post'], 20, 2);
         add_action('geo_mashup_location_saved', [$this, 'on_geo_mashup_location_saved'], 10, 3);
         add_action(self::CRON_HOOK,             [$this, 'run_scheduled_tagging'], 10, 1);
@@ -67,6 +75,7 @@ class Core {
         if (wp_is_post_revision($post_id))  return;
         if (!$this->is_taggable($post))     return;
 
+        $this->restore_geo_tags($post_id);
         $this->tag_now_or_schedule($post_id);
     }
 
@@ -81,6 +90,80 @@ class Core {
         // this hook is guaranteed to see it — which is exactly what the fast
         // path needs to run inline.
         $this->tag_now_or_schedule($object_id);
+    }
+
+    /**
+     * Records which geo tags the post has before this request can drop them.
+     *
+     * The classic editor round-trips the tag list through a
+     * tax_input[post_tag] form field rendered when the edit screen loaded,
+     * and wp_insert_post() applies it with $append = false — a replace, not
+     * an add. Any geo tag attached after that render (by cron, or inline
+     * during an earlier save) is therefore deleted by the next save, and a
+     * stale edit screen keeps resubmitting the same tagless list, so the
+     * tags never survive long enough to be drawn.
+     *
+     * pre_post_update fires inside wp_insert_post() before that tax_input
+     * block, which makes it the last point at which the pre-request truth is
+     * still readable. Working from term ids taken from the database — rather
+     * than filtering the submitted names — also sidesteps Polylang, where
+     * one name can exist as a different term per language.
+     */
+    public function remember_geo_tags(int $post_id): void {
+        unset($this->preserved_geo_tags[$post_id]);
+
+        // pre_post_update fires for every post type; get_post() still returns
+        // the pre-update row here, so this is the cheap way to avoid three
+        // lookups on every attachment and CPT write on the site.
+        $post = get_post($post_id);
+        if (!$post instanceof \WP_Post) {
+            return;
+        }
+        if (!in_array($post->post_type, ['post', 'page'], true)) {
+            return;
+        }
+
+        $term_ids = wp_get_post_terms($post_id, 'post_tag', ['fields' => 'ids']);
+        if (is_wp_error($term_ids) || !$term_ids) {
+            return;
+        }
+
+        $geo = $this->place_repo->filter_geo_term_ids($term_ids);
+        if ($geo) {
+            $this->preserved_geo_tags[$post_id] = $geo;
+        }
+    }
+
+    /**
+     * Re-attaches any geo tag the save dropped.
+     *
+     * Appends, so it restores what was lost without disturbing tags the
+     * editor legitimately added in the same request. A no-op when tax_input
+     * was not submitted at all (an autosave, or the Tags box hidden via
+     * Screen Options), because nothing was removed.
+     *
+     * This deliberately reinstates a geo tag removed by hand in the editor.
+     * That matches what the plugin already does — attach_from_place_chain()
+     * re-attaches the whole chain on every save — and the place to sever a
+     * post from a location is its Geo Mashup location, not its tag list.
+     */
+    private function restore_geo_tags(int $post_id): void {
+        if (empty($this->preserved_geo_tags[$post_id])) {
+            return;
+        }
+
+        $preserved = $this->preserved_geo_tags[$post_id];
+        unset($this->preserved_geo_tags[$post_id]);
+
+        $current = wp_get_post_terms($post_id, 'post_tag', ['fields' => 'ids']);
+        $current = is_wp_error($current) ? [] : array_map('intval', $current);
+
+        $missing = array_values(array_diff($preserved, $current));
+        if (!$missing) {
+            return;
+        }
+
+        wp_set_post_terms($post_id, $missing, 'post_tag', true);
     }
 
     /**
