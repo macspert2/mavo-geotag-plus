@@ -306,7 +306,9 @@ class AdminPage {
                         <td>
                             "More about {place}" tiles. Auto-picks the most specific level
                             (city → region → country) that has enough other posts, unless
-                            <code>level</code> forces one.
+                            <code>level</code> forces one. When Mavo Hub Manager is active and
+                            the post has a primary geographic hub, that hub leads the section as
+                            the first tile, labelled "Guide".
                         </td>
                         <td>
                             <code>post_id</code> — defaults to the current post.<br>

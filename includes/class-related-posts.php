@@ -22,6 +22,12 @@ defined('ABSPATH') || exit;
  *   cta     — "Plan your trip to {place}" framing, same image tiles.
  *   compact — text-link list, no images, for narrow contexts.
  *
+ * When Mavo Hub Manager is active and the post has a primary *geographic*
+ * hub, that hub leads the section as the first tile, marked with the site's
+ * warm eyebrow ("Guide" / "Übersicht") the way Mavo For You marks its own hub
+ * card. It is not the closest match — it is the page that says it owns this
+ * article — so it is placed ahead of the ranking rather than scored into it.
+ *
  * Also exposed as global functions (geo_tagger_related_posts() /
  * geo_tagger_related_posts_full()) for systematic theme use — e.g.
  * called directly from content-single.php so every geo-tagged post
@@ -63,6 +69,7 @@ class RelatedPosts {
                 'country' => 'Dans le même pays : %s',
             ],
             'see_all'     => 'Voir tous les articles sur %s',
+            'hub_label'   => 'Guide',
         ],
         'en' => [
             'heading'     => 'More about %s',
@@ -72,6 +79,7 @@ class RelatedPosts {
                 'country' => 'In the same country: %s',
             ],
             'see_all'     => 'See all articles about %s',
+            'hub_label'   => 'Guide',
         ],
         'de' => [
             'heading'     => 'Mehr über %s',
@@ -81,6 +89,7 @@ class RelatedPosts {
                 'country' => 'Im gleichen Land: %s',
             ],
             'see_all'     => 'Alle Artikel über %s ansehen',
+            'hub_label'   => 'Übersicht',
         ],
     ];
 
@@ -169,6 +178,7 @@ class RelatedPosts {
 
         $by_level      = $this->index_chain_by_level($chain);
         $levels_to_try = $level ? [$level] : self::LEVELS_DESC;
+        $hub           = $this->resolve_geo_hub($post_id, $lang);
 
         foreach ($levels_to_try as $try_level) {
             $place = $by_level[$try_level] ?? null;
@@ -181,15 +191,24 @@ class RelatedPosts {
                 continue;
             }
 
-            $posts = $this->query_related($term_id, $post_id, $limit);
+            $posts = $this->query_related($term_id, $hub ? [$post_id, $hub->ID] : [$post_id], $limit);
 
             if ($level || count($posts) >= self::MIN_OTHERS) {
+                // The hub takes a tile of its own, so one related post steps
+                // aside: the section still shows $limit tiles in total and the
+                // grid stays a clean 3 columns at the default limit=6. Trimmed
+                // only after the threshold above, so the hub can never cost a
+                // section the MIN_OTHERS bar it would otherwise have cleared.
+                if ($hub) {
+                    $posts = array_slice($posts, 0, max(1, $limit - 1));
+                }
+
                 $place_name_fr = (string) ($place->name_fr ?? '');
                 $place_label   = function_exists('mv_normalize_geo_label')
                     ? mv_normalize_geo_label($place_name_fr)
                     : $place_name_fr;
                 $current_geo   = ['type' => $try_level, 'slug' => sanitize_title($place_label)];
-                return $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style, $current_geo);
+                return $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style, $current_geo, $hub);
             }
         }
 
@@ -219,6 +238,7 @@ class RelatedPosts {
 
         $by_level = $this->index_chain_by_level($chain);
         $sections = '';
+        $hub      = $this->resolve_geo_hub($post_id, $lang);
 
         foreach (self::LEVELS_DESC as $try_level) {
             $place = $by_level[$try_level] ?? null;
@@ -243,9 +263,12 @@ class RelatedPosts {
                 continue;
             }
 
-            $posts = $this->query_related($term_id, $post_id, $limit);
+            $posts = $this->query_related($term_id, $hub ? [$post_id, $hub->ID] : [$post_id], $limit);
             if (count($posts) < self::MIN_OTHERS) {
                 continue;
+            }
+            if ($hub) {
+                $posts = array_slice($posts, 0, max(1, $limit - 1));
             }
 
             $place_name_fr = (string) ($place->name_fr ?? '');
@@ -253,7 +276,12 @@ class RelatedPosts {
                 ? mv_normalize_geo_label($place_name_fr)
                 : $place_name_fr;
             $current_geo   = ['type' => $try_level, 'slug' => sanitize_title($place_label)];
-            $sections .= $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style, $current_geo);
+            $sections .= $this->render_section($try_level, (string) $place->{'name_' . $lang}, $term_id, $posts, $lang, $style, $current_geo, $hub);
+
+            // Only the first section that renders carries the hub tile —
+            // repeating "here is the guide that owns this article" under
+            // every level would say the same thing three times.
+            $hub = null;
         }
 
         return $sections;
@@ -285,7 +313,7 @@ class RelatedPosts {
     /**
      * @return \WP_Post[]
      */
-    private function query_related(int $term_id, int $exclude_post_id, int $limit): array {
+    private function query_related(int $term_id, array $exclude_ids, int $limit): array {
         // Geo Tagger Core explicitly tags both 'post' and 'page' (e.g.
         // destination hub pages like /france/ carry the same country
         // tag as regular posts), and 'post_type' => 'post' below has not
@@ -298,7 +326,7 @@ class RelatedPosts {
             'post_type'           => 'post',
             'post_status'         => 'publish',
             'tag__in'             => [$term_id],
-            'post__not_in'        => [$exclude_post_id],
+            'post__not_in'        => array_values(array_filter($exclude_ids)),
             'posts_per_page'      => $limit + 5,
             'ignore_sticky_posts' => true,
             'no_found_rows'       => true,
@@ -331,8 +359,10 @@ class RelatedPosts {
         return (int) $query->found_posts;
     }
 
-    private function render_section(string $level, string $place_name, int $term_id, array $posts, string $lang, string $style, ?array $current_geo = null): string {
-        if (empty($posts)) {
+    private function render_section(string $level, string $place_name, int $term_id, array $posts, string $lang, string $style, ?array $current_geo = null, ?\WP_Post $hub = null): string {
+        // A hub on its own is still worth a section: it is the one link that
+        // says "everything about this place lives here".
+        if (empty($posts) && !$hub) {
             return '';
         }
 
@@ -353,6 +383,16 @@ class RelatedPosts {
 
         $items      = '';
         $badge_seen = [];
+
+        // The hub goes first: it is not the closest match, it is the page that
+        // says it owns this article, and it answers "where does all of this
+        // live?" before any single sibling can.
+        if ($hub) {
+            $items .= $is_compact
+                ? $this->render_hub_list_item($hub, $lang)
+                : $this->render_hub_tile($hub, $lang);
+        }
+
         foreach ($posts as $post) {
             $items .= $is_compact ? $this->render_list_item($post) : $this->render_tile($post, $current_geo, $badge_seen);
         }
@@ -411,6 +451,96 @@ class RelatedPosts {
         return get_permalink( $page ) ?: null;
     }
 
+    /**
+     * The post's primary geographic hub as a WP_Post, or null.
+     *
+     * Mavo Hub Manager's procedural API is the contract — no hub meta is read
+     * directly here. It stores relationships as raw meta and says plainly that
+     * they "may be stale; validate before use", so what comes back is checked
+     * three ways before a reader ever sees it: the hub still exists and is
+     * published, it is still marked as a *geographic* hub, and it is in the
+     * same language as the post. Cross-language links are never followed, not
+     * even for a hub — a German post is not sent to a French guide.
+     *
+     * When Hub Manager is inactive this returns null and the sections render
+     * exactly as they did before hubs existed.
+     */
+    private function resolve_geo_hub(int $post_id, string $lang): ?\WP_Post {
+        if (!function_exists('mavo_get_primary_hub') || !function_exists('mavo_get_hub_type')) {
+            return null;
+        }
+
+        $hub_id = (int) (mavo_get_primary_hub($post_id, 'geo') ?? 0);
+        if (!$hub_id || $hub_id === $post_id) {
+            return null;
+        }
+
+        $hub = get_post($hub_id);
+        if (!$hub instanceof \WP_Post || 'publish' !== $hub->post_status) {
+            return null;
+        }
+
+        if ('geo' !== mavo_get_hub_type($hub_id)) {
+            return null;
+        }
+
+        if ($lang !== $this->get_lang($hub_id)) {
+            return null;
+        }
+
+        return $hub;
+    }
+
+    /**
+     * The label that marks a link as a hub — "Guide" (fr/en), "Übersicht"
+     * (de). Taken from Mavo For You's config when that plugin is active so
+     * the two blocks never drift apart in wording, with a local copy of the
+     * same strings as the fallback.
+     */
+    private function hub_label(string $lang): string {
+        if (class_exists('\MFY_Config') && method_exists('\MFY_Config', 'hub_labels')) {
+            $labels = (array) \MFY_Config::hub_labels($lang);
+            if (!empty($labels['geo'])) {
+                return (string) $labels['geo'];
+            }
+        }
+
+        $strings = self::STRINGS[$lang] ?? self::STRINGS['fr'];
+        return (string) ($strings['hub_label'] ?? '');
+    }
+
+    /**
+     * The hub tile. Same shape as a post tile — image, title, stretched link —
+     * marked as a hub the way Mavo For You marks its own hub card: the warm
+     * eyebrow above the title plus a hairline of emphasis down the left edge.
+     * No badges: an editorial "this is the guide" and a row of status chips
+     * are two different claims, and only the first one belongs here.
+     */
+    private function render_hub_tile(\WP_Post $hub, string $lang): string {
+        $image = get_the_post_thumbnail($hub, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
+        $label = $this->hub_label($lang);
+
+        return sprintf(
+            '<div class="geo-related__tile geo-related__tile--hub">%s%s<span class="geo-related__title"><a class="geo-related__link" href="%s">%s</a></span></div>',
+            $image ?: '',
+            $label ? '<span class="geo-related__eyebrow">' . esc_html($label) . '</span>' : '',
+            esc_url(get_permalink($hub)),
+            esc_html(get_the_title($hub))
+        );
+    }
+
+    /** The compact (text-link) equivalent, labelled the same way. */
+    private function render_hub_list_item(\WP_Post $hub, string $lang): string {
+        $label = $this->hub_label($lang);
+
+        return sprintf(
+            '<li class="geo-related__list-item geo-related__list-item--hub"><a href="%s">%s</a>%s</li>',
+            esc_url(get_permalink($hub)),
+            esc_html(get_the_title($hub)),
+            $label ? '<span class="geo-related__hub-label">' . esc_html($label) . '</span>' : ''
+        );
+    }
+
     private function render_tile(\WP_Post $post, ?array $current_geo = null, array &$badge_seen = []): string {
         $image  = get_the_post_thumbnail($post, 'medium_large', ['class' => 'geo-related__image', 'alt' => '']);
         $badges = '';
@@ -463,6 +593,15 @@ class RelatedPosts {
              . '.geo-related__title{display:block;padding:.6em .75em;font-size:.9em;line-height:1.3}'
              . '.geo-related__link{color:inherit;text-decoration:none}'
              . '.geo-related__link::after{content:\'\';position:absolute;inset:0;z-index:0}'
+             // Hub markers. The theme's own .mv-tile__eyebrow is the visual
+             // vocabulary being reused here (warm brown, small, bold), but the
+             // classes are local: mv-tiles.css is not enqueued on regular
+             // posts, and this block has to look right on its own.
+             . '.geo-related__tile--hub{box-shadow:var(--mv-tile-shadow,0 8px 22px rgba(58,58,58,.08)),inset 3px 0 0 var(--mv-color-warm,#886353)}'
+             . '.geo-related__tile--hub:hover{box-shadow:var(--mv-tile-shadow-hover,0 12px 30px rgba(58,58,58,.12)),inset 3px 0 0 var(--mv-color-warm,#886353)}'
+             . '.geo-related__eyebrow{display:block;padding:.6em .75em 0;color:var(--mv-color-warm,#886353);font-size:.78em;font-weight:700;letter-spacing:.01em;line-height:1.2}'
+             . '.geo-related__eyebrow + .geo-related__title{padding-top:.25em}'
+             . '.geo-related__hub-label{margin-left:.4em;font-size:.78em;font-weight:700;letter-spacing:.01em;color:var(--mv-color-warm,#886353);white-space:nowrap}'
              . '.geo-related__list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5em}'
              . '.geo-related__list-item a{text-decoration:none}'
              . '.geo-related__list-item a:hover{text-decoration:underline}'
