@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.39
+ * Version: 1.0.41
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.39');
+define('GEO_TAGGER_VERSION', '1.0.41');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -131,9 +131,8 @@ function geo_tagger_term_breadcrumb(int $term_id = 0): string {
  * siblings — with the recommendation engine rather than a tag query, and is
  * swapped for a personalized block once the visitor has read enough.
  *
- * mavo-for-you registers [geo_related] and [geo_related_full], and keeps
- * geo_tagger_related_posts() / geo_tagger_related_posts_full() as shims, so
- * existing post content and any template call still work.
+ * mavo-for-you registers [geo_related] and keeps geo_tagger_related_posts() as
+ * a shim, so existing post content and any template call still work.
  *
  * This plugin had come to depend on mavo-for-you's hub labels to keep the two
  * blocks' wording in step; the move removes that inversion. Place data stays
