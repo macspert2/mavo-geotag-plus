@@ -219,7 +219,7 @@ class PlaceRepository {
      * Resolves a post to its full geographic place chain (continent → leaf),
      * via whichever of its post_tag terms is the deepest geo tag it carries
      * (city > region > country > continent). Moved here from GeoBreadcrumb
-     * (where it was private) so RelatedPosts can share the exact same
+     * (where it was private) so other callers can share the exact same
      * "post → place" resolution rather than duplicating the query.
      *
      * @return object[] Ordered continent → leaf, or [] if the post has no geo tags.

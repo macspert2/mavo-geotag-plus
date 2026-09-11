@@ -484,7 +484,7 @@ class GeoBreadcrumb {
 
     /**
      * Resolution itself now lives in PlaceRepository::get_chain_for_post()
-     * (shared with RelatedPosts) — this just adds the per-request cache.
+     * (shared with the place repository) — this just adds the per-request cache.
      */
     private function get_cached_chain(int $post_id, string $lang): array {
         $key = $post_id . '_' . $lang;

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: MaVo GeoTag Plus
  * Description: Automatically adds multilingual geographic tags to posts with Geo Mashup locations.
- * Version: 1.0.38
+ * Version: 1.0.39
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
@@ -10,7 +10,7 @@
 defined('ABSPATH') || exit;
 
 define('GEO_TAGGER_DIR', plugin_dir_path(__FILE__));
-define('GEO_TAGGER_VERSION', '1.0.38');
+define('GEO_TAGGER_VERSION', '1.0.39');
 
 spl_autoload_register(function (string $class): void {
     $map = [
@@ -23,7 +23,6 @@ spl_autoload_register(function (string $class): void {
         'GeoTagger\\BatchProcessor'  => 'includes/class-batch-processor.php',
         'GeoTagger\\PlaceRepository' => 'includes/class-place-repository.php',
         'GeoTagger\\GeoBreadcrumb'        => 'includes/class-geo-breadcrumb.php',
-        'GeoTagger\\RelatedPosts'         => 'includes/class-related-posts.php',
         'GeoTagger\\SearchHierarchy'      => 'includes/class-search-hierarchy.php',
         'GeoTagger\\AdminPage'            => 'admin/class-admin-page.php',
         'GeoTagger\\DuplicateTagManager'  => 'admin/class-duplicate-tag-manager.php',
@@ -61,15 +60,11 @@ add_action('plugins_loaded', function (): void {
     $breadcrumb = new GeoTagger\GeoBreadcrumb($place_repo);
     $breadcrumb->init();
 
-    $related_posts = new GeoTagger\RelatedPosts($place_repo);
-    $related_posts->init();
-
     $search_hierarchy = new GeoTagger\SearchHierarchy($place_repo);
     $search_hierarchy->init();
 
     // Store instances so the global helper functions can access them
     $GLOBALS['geo_tagger_breadcrumb']       = $breadcrumb;
-    $GLOBALS['geo_tagger_related_posts']    = $related_posts;
     $GLOBALS['geo_tagger_search_hierarchy'] = $search_hierarchy;
 
     if (is_admin()) {
@@ -129,48 +124,21 @@ function geo_tagger_term_breadcrumb(int $term_id = 0): string {
 }
 
 /**
- * Returns "other articles from the same place" tiles for a post — a CTA
- * to help the reader prepare their trip. Auto-cascades city → region →
- * country, showing the first level with at least 3 other posts, unless
- * $level forces a specific one.
+ * "Other articles from the same place" moved to the mavo-for-you plugin.
  *
- * Usage in templates (e.g. content-single.php, for every geo-tagged post
- * automatically — no shortcode needed in the post content):
- *     echo geo_tagger_related_posts( get_the_ID() );
- *     echo geo_tagger_related_posts( get_the_ID(), 'city', 'cta' );
+ * The block it rendered has been replaced by that plugin's [geo_related],
+ * which scores the same material — hub, geographic siblings, travel-finder
+ * siblings — with the recommendation engine rather than a tag query, and is
+ * swapped for a personalized block once the visitor has read enough.
  *
- * Usage as shortcode:
- *     [geo_related]
- *     [geo_related level="city" style="cta" limit="4"]
+ * mavo-for-you registers [geo_related] and [geo_related_full], and keeps
+ * geo_tagger_related_posts() / geo_tagger_related_posts_full() as shims, so
+ * existing post content and any template call still work.
  *
- * @param int         $post_id  Post ID. Defaults to the current post in the loop.
- * @param string|null $level    'city' | 'region' | 'country', or null to auto-cascade.
- * @param string      $style    'plain' (default) | 'cta' | 'compact' (text links, no images).
- * @param int         $limit    Max number of related posts to show.
- * @return string     HTML, or empty string if there's nothing to show.
+ * This plugin had come to depend on mavo-for-you's hub labels to keep the two
+ * blocks' wording in step; the move removes that inversion. Place data stays
+ * here, scoring lives there.
  */
-function geo_tagger_related_posts(int $post_id = 0, ?string $level = null, string $style = 'plain', int $limit = 6): string {
-    $instance = $GLOBALS['geo_tagger_related_posts'] ?? null;
-    return $instance ? $instance->render($post_id, $level, $style, $limit) : '';
-}
-
-/**
- * Same as geo_tagger_related_posts(), but stacks a separate section for
- * every level (city, region, country) that has at least 3 other posts,
- * most specific first, instead of stopping at the first one that qualifies.
- *
- * Usage in templates:   echo geo_tagger_related_posts_full( get_the_ID() );
- * Usage as shortcode:   [geo_related_full]  or  [geo_related_full style="cta"]
- *
- * @param int    $post_id  Post ID. Defaults to the current post in the loop.
- * @param string $style    'plain' (default) | 'cta' | 'compact'.
- * @param int    $limit    Max number of related posts per section.
- * @return string HTML, or empty string if there's nothing to show.
- */
-function geo_tagger_related_posts_full(int $post_id = 0, string $style = 'plain', int $limit = 6): string {
-    $instance = $GLOBALS['geo_tagger_related_posts'] ?? null;
-    return $instance ? $instance->render_full($post_id, $style, $limit) : '';
-}
 
 /**
  * For the search results page: if the search term matches a known

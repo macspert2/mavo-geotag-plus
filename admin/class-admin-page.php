@@ -304,6 +304,204 @@ class AdminPage {
                     <tr>
                         <td><code>[geo_related]</code></td>
                         <td>
+                            <strong>Now provided by Mavo For You.</strong> Renders that plugin's
+                            recommendation block: the post's hub first, then its geographic and
+                            travel-finder siblings, scored by the recommendation engine rather
+                            than a tag query. Once a visitor has read enough, the block is
+                            replaced in place by their personalised "Pour vous" suggestions.
+                        </td>
+                        <td>
+                            <code>level</code> = <code>city</code> | <code>region</code> | <code>country</code> — default: auto.<br>
+                            <code>limit</code> — max tiles. Default: 6.<br>
+                            <code>post_id</code> and <code>style</code> are accepted and ignored.
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>[geo_related_full]</code></td>
+                        <td>An alias of <code>[geo_related]</code>, kept so existing post content keeps working.</td>
+                        <td>Same as above.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <!-- Settings -->
+            <h2>Settings</h2>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('geo_tagger_save_settings'); ?>
+                <input type="hidden" name="action" value="geo_tagger_save_settings">
+                <table class="form-table">
+                    <tr>
+                        <th><label for="gt-user-agent">User-Agent</label></th>
+                        <td>
+                            <input type="text" id="gt-user-agent" name="user_agent"
+                                   value="<?php echo esc_attr($settings['user_agent']); ?>"
+                                   class="regular-text"
+                                   placeholder="GeoTagger/1.0 (your-site.com)">
+                            <p class="description">Required by Nominatim ToS. Identifies your site.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="gt-cache-days">Cache TTL (days)</label></th>
+                        <td>
+                            <input type="number" id="gt-cache-days" name="cache_days"
+                                   value="<?php echo esc_attr($settings['cache_days']); ?>"
+                                   min="1" max="365" class="small-text">
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="gt-rate-limit">Rate limit (ms)</label></th>
+                        <td>
+                            <input type="number" id="gt-rate-limit" name="rate_limit_ms"
+                                   value="<?php echo esc_attr($settings['rate_limit_ms']); ?>"
+                                   min="1000" max="5000" class="small-text">
+                            <p class="description">Minimum milliseconds between Nominatim requests (min 1000).</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Continent tags</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="continent_tags" value="1"
+                                       <?php checked($settings['continent_tags']); ?>>
+                                Enable continent-level tags
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="gt-min-depth">Minimum depth</label></th>
+                        <td>
+                            <select id="gt-min-depth" name="min_depth">
+                                <?php foreach (['country' => 'Country only', 'region' => '+ Region', 'county' => '+ County', 'city' => '+ City'] as $val => $label): ?>
+                                <option value="<?php echo esc_attr($val); ?>" <?php selected($settings['min_depth'], $val); ?>>
+                                    <?php echo esc_html($label); ?>
+                                </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Breadcrumb region visibility</th>
+                        <td>
+                            <?php
+                            global $wpdb;
+                            $countries = $wpdb->get_results(
+                                "SELECT DISTINCT country_code, name_fr, name_en, name_de
+                                 FROM {$wpdb->prefix}geo_tagger_places
+                                 WHERE level = 'country' AND country_code != ''
+                                 ORDER BY name_fr"
+                            );
+                            $region_countries = $settings['region_countries'] ?? [];
+
+                            if (empty($countries)):
+                            ?>
+                            <p class="description">No countries found yet — run the batch processor first.</p>
+                            <?php else: ?>
+                            <p class="description" style="margin-bottom:8px">
+                                Show the region breadcrumb only for ticked countries.
+                                Unticked countries go straight from country to city (if applicable).
+                            </p>
+                            <div style="max-height:220px;overflow-y:auto;border:1px solid #c3c4c7;
+                                        padding:10px 14px;border-radius:3px;background:#fff">
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px 20px">
+                            <?php foreach ($countries as $c):
+                                $display = $c->name_fr ?: ($c->name_en ?: ($c->name_de ?: strtoupper($c->country_code)));
+                                $checked = in_array($c->country_code, $region_countries, true) ? 'checked' : '';
+                            ?>
+                                <label style="display:block;margin-bottom:4px;break-inside:avoid">
+                                    <input type="checkbox"
+                                           name="region_countries[]"
+                                           value="<?php echo esc_attr($c->country_code); ?>"
+                                           <?php echo $checked; ?>>
+                                    <?php echo esc_html($display); ?>
+                                    <span style="color:#888;font-size:11px">(<?php echo esc_html(strtoupper($c->country_code)); ?>)</span>
+                                </label>
+                            <?php endforeach; ?>
+                            </div><!-- /grid -->
+                            </div><!-- /scroll -->
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                </table>
+                <?php submit_button('Save Settings'); ?>
+            </form>
+
+            <!-- Single Post Test -->
+            <h2>Test: Single Post</h2>
+            <p>Process one post by ID to verify tagging before running the full batch.</p>
+            <p>
+                <input type="number" id="gt-single-post-id" min="1" placeholder="Post ID"
+                       style="width:120px" class="regular-text">
+                <button type="button" id="gt-single-post-btn" class="button button-primary"
+                        style="margin-left:6px"
+                        <?php echo (!$geo_mashup_ok || !$polylang_ok) ? 'disabled' : ''; ?>>
+                    Process Post
+                </button>
+                <button type="button" id="gt-single-force-btn" class="button"
+                        style="margin-left:6px"
+                        <?php echo (!$geo_mashup_ok || !$polylang_ok) ? 'disabled' : ''; ?>>
+                    Force Reprocessing
+                </button>
+            </p>
+            <div id="gt-single-result" style="display:none;margin-top:10px;padding:10px 14px;
+                background:#fff;border:1px solid #c3c4c7;border-radius:3px;max-width:600px;
+                line-height:1.7;font-size:13px">
+            </div>
+
+            <!-- Batch Processor -->
+            <h2>Batch Processor</h2>
+            <p>Tags all existing posts that have a Geo Mashup location. Safe to run multiple times — already-tagged posts are skipped.</p>
+
+            <p>
+                <button type="button" id="gt-run-batch" class="button button-primary"
+                    <?php echo (!$geo_mashup_ok || !$polylang_ok) ? 'disabled' : ''; ?>>
+                    Run Batch Processor
+                </button>
+                <button type="button" id="gt-clear-cache" class="button" style="margin-left:10px">
+                    Clear Nominatim Cache
+                </button>
+                <button type="button" id="gt-clear-breadcrumb-cache" class="button" style="margin-left:10px">
+                    Clear Breadcrumb Cache
+                </button>
+            </p>
+            <p class="description">
+                "Clear Breadcrumb Cache" deletes the cached breadcrumb HTML/JSON-LD for all posts
+                and tag archives (including any manual link edits) so the next save/batch run
+                (posts) or page view (tag archives) regenerates them — use after changing the
+                breadcrumb template, styling, or region whitelist.
+            </p>
+
+            <div id="gt-progress" style="display:none;max-width:600px;margin-top:15px">
+                <div style="background:#ddd;border-radius:4px;height:20px;overflow:hidden">
+                    <div id="gt-progress-bar" style="background:#0073aa;height:100%;width:0;transition:width 0.3s"></div>
+                </div>
+                <p id="gt-progress-text" style="margin:5px 0 0">0 / 0 posts processed</p>
+            </div>
+
+            <div id="gt-log" style="display:none;margin-top:15px;max-height:400px;overflow-y:auto;
+                background:#1e1e1e;color:#d4d4d4;font-family:monospace;font-size:12px;
+                padding:10px;border-radius:4px">
+            </div>
+
+            <!-- Shortcodes -->
+            <h2>Shortcodes</h2>
+            <p>Use these in post/page content — e.g. via the block editor's "Shortcode" block.</p>
+            <table class="widefat" style="max-width:900px">
+                <thead>
+                    <tr>
+                        <th style="width:220px">Shortcode</th>
+                        <th>What it does</th>
+                        <th style="width:320px">Attributes (all optional)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>[geo_breadcrumb]</code></td>
+                        <td>Geographic breadcrumb: Home › Continent › Country › Region › City.</td>
+                        <td><code>post_id</code> — defaults to the current post.</td>
+                    </tr>
+                    <tr>
+                        <td><code>[geo_related]</code></td>
+                        <td>
                             "More about {place}" tiles. Auto-picks the most specific level
                             (city → region → country) that has enough other posts, unless
                             <code>level</code> forces one. When Mavo Hub Manager is active and
@@ -336,8 +534,10 @@ class AdminPage {
                 Equivalent PHP functions are also available for theme templates (e.g. for
                 automatic placement on every post without editing content) — see the docblocks
                 in <code>mavo-geotag-plus.php</code>: <code>geo_tagger_breadcrumb()</code>,
-                <code>geo_tagger_term_breadcrumb()</code>, <code>geo_tagger_related_posts()</code>,
-                <code>geo_tagger_related_posts_full()</code>, <code>geo_tagger_search_hierarchy()</code>.
+                <code>geo_tagger_term_breadcrumb()</code>, <code>geo_tagger_search_hierarchy()</code>.
+                <code>geo_tagger_related_posts()</code> and
+                <code>geo_tagger_related_posts_full()</code> still work, but are now shims
+                provided by Mavo For You.
             </p>
         </div>
         <?php
