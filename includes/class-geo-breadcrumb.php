@@ -6,9 +6,19 @@ defined('ABSPATH') || exit;
 
 class GeoBreadcrumb {
 
-    private const WORLD_URL     = 'https://www.mamanvoyage.com/ou-partir-trouvez-votre-prochain-voyage/';
+    // The travel-finder page, per language. Was a single French constant until
+    // the EN/DE finder pages existed, which sent English and German breadcrumbs
+    // (and their JSON-LD) to the French page.
+    private const WORLD_URLS    = [
+        'fr' => 'https://www.mamanvoyage.com/ou-partir-trouvez-votre-prochain-voyage/',
+        'en' => 'https://www.mamanvoyage.com/en/where-to/',
+        'de' => 'https://www.mamanvoyage.com/de/wohin-reisen/',
+    ];
     private const ALLOWED_LANGS = ['fr', 'en', 'de'];
     private const HOME_LABELS   = ['fr' => 'Accueil', 'en' => 'Home', 'de' => 'Startseite'];
+    // Label of the world/travel-finder crumb. Was hardcoded French, so English
+    // and German breadcrumbs — and their JSON-LD — read "Voyages".
+    private const WORLD_LABELS  = ['fr' => 'Voyages', 'en' => 'Travel', 'de' => 'Reisen'];
 
     public const META_HTML        = '_geo_breadcrumb_html';
     public const META_JSON        = '_geo_breadcrumb_json';
@@ -315,8 +325,8 @@ class GeoBreadcrumb {
             ],
             [
                 'level' => 'world',
-                'name'  => 'Voyages',
-                'url'   => self::WORLD_URL,
+                'name'  => self::WORLD_LABELS[$lang] ?? self::WORLD_LABELS['fr'],
+                'url'   => self::WORLD_URLS[$lang] ?? self::WORLD_URLS['fr'],
             ],
         ];
 
