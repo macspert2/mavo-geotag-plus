@@ -60,18 +60,31 @@ class AdminPage {
             ? $_POST['region_countries']
             : [];
 
+        $previous = get_option('geo_tagger_settings', []);
+
         $settings = [
             'user_agent'       => sanitize_text_field($_POST['user_agent'] ?? ''),
             'cache_days'       => absint($_POST['cache_days'] ?? 30),
             'rate_limit_ms'    => absint($_POST['rate_limit_ms'] ?? 1100),
-            'continent_tags'   => !empty($_POST['continent_tags']),
-            'min_depth'        => in_array($_POST['min_depth'] ?? '', ['country', 'region', 'county', 'city'], true)
-                                    ? $_POST['min_depth']
-                                    : 'city',
             'region_countries' => array_values(array_map('sanitize_key', $raw_countries)),
         ];
 
         update_option('geo_tagger_settings', $settings);
+
+        // The region whitelist decides which ancestors a breadcrumb prunes, so
+        // changing it falsifies every cached breadcrumb at once — there is no
+        // subtree to narrow it to. Clearing here is what makes the setting take
+        // effect on published content; it used to require pressing "Clear
+        // Breadcrumb Cache" afterwards, and knowing that you had to.
+        $before = (array) ($previous['region_countries'] ?? []);
+        $after  = $settings['region_countries'];
+        sort($before);
+        sort($after);
+
+        if ($before !== $after) {
+            (new GeoBreadcrumb($this->core->get_place_repo()))->invalidate_all();
+        }
+
         wp_redirect(add_query_arg(['page' => 'geo-tagger', 'saved' => '1'], admin_url('tools.php')));
         exit;
     }
@@ -159,28 +172,16 @@ class AdminPage {
                             <p class="description">Minimum milliseconds between Nominatim requests (min 1000).</p>
                         </td>
                     </tr>
-                    <tr>
-                        <th>Continent tags</th>
-                        <td>
-                            <label>
-                                <input type="checkbox" name="continent_tags" value="1"
-                                       <?php checked($settings['continent_tags']); ?>>
-                                Enable continent-level tags
-                            </label>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th><label for="gt-min-depth">Minimum depth</label></th>
-                        <td>
-                            <select id="gt-min-depth" name="min_depth">
-                                <?php foreach (['country' => 'Country only', 'region' => '+ Region', 'county' => '+ County', 'city' => '+ City'] as $val => $label): ?>
-                                <option value="<?php echo esc_attr($val); ?>" <?php selected($settings['min_depth'], $val); ?>>
-                                    <?php echo esc_html($label); ?>
-                                </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </td>
-                    </tr>
+                    <?php
+                    /*
+                     * A "Continent tags" checkbox and a "Minimum depth" dropdown
+                     * used to sit here. Both were saved to the option and read
+                     * by nothing — see Core::DEFAULT_SETTINGS for why, and for
+                     * what implementing them would involve. Removed rather than
+                     * left in place, so the screen only shows controls that do
+                     * something.
+                     */
+                    ?>
                     <tr>
                         <th>Breadcrumb region visibility</th>
                         <td>

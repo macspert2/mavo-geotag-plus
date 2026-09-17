@@ -389,13 +389,23 @@ class TagManager {
         }
         $term_id = (int) $wpdb->insert_id;
 
-        $wpdb->insert($wpdb->term_taxonomy, [
+        $taxonomy_ok = $wpdb->insert($wpdb->term_taxonomy, [
             'term_id'     => $term_id,
             'taxonomy'    => 'post_tag',
             'description' => '',
             'parent'      => 0,
             'count'       => 0,
         ]);
+
+        // A wp_terms row with no wp_term_taxonomy row is invisible to every
+        // WordPress API and permanently holds the slug, so the next attempt at
+        // this place would find it via get_term_id_by_slug() and return an id
+        // that is not a usable term. Undo the half-insert instead.
+        if ($taxonomy_ok === false) {
+            error_log('Geo Tagger: term_taxonomy insert failed for slug=' . $slug . ': ' . $wpdb->last_error);
+            $wpdb->delete($wpdb->terms, ['term_id' => $term_id], ['%d']);
+            return null;
+        }
 
         clean_term_cache($term_id, 'post_tag', false);
 

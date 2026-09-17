@@ -466,6 +466,22 @@ class DuplicateTagManager {
         clean_term_cache([$keep_id, $drop_id], 'post_tag');
         $log[] = "Step 7 — Cleaned WordPress term cache for both IDs.";
 
-        wp_send_json_success(['log' => $log, 'keep_id' => $keep_id, 'drop_id' => $drop_id]);
+        // Step 8: drop cached breadcrumbs mentioning either term.
+        //
+        // Cached breadcrumb HTML holds the term archive URL resolved at cache
+        // time, so every crumb pointing at B now points at a term that no
+        // longer exists. The cache fingerprint is place_id + lang and cannot
+        // see a term merge, so nothing would have rebuilt them; the dead links
+        // survived until someone cleared the whole cache by hand.
+        $breadcrumb  = new GeoBreadcrumb(new PlaceRepository());
+        $invalidated = $breadcrumb->invalidate_terms([$keep_id, $drop_id]);
+        $log[]       = "Step 8 — Dropped {$invalidated} cached breadcrumb meta row(s) for both terms; they rebuild on next view.";
+
+        wp_send_json_success([
+            'log'         => $log,
+            'keep_id'     => $keep_id,
+            'drop_id'     => $drop_id,
+            'invalidated' => $invalidated,
+        ]);
     }
 }

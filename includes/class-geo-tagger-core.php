@@ -21,12 +21,32 @@ class Core {
      */
     private const CRON_DELAY = 30;
 
+    /**
+     * Every setting the plugin actually reads.
+     *
+     * `user_agent`, `cache_days` and `rate_limit_ms` are NominatimClient's;
+     * `region_countries` is GeoBreadcrumb's ancestor-pruning whitelist.
+     *
+     * Two more used to be here — `continent_tags` (bool) and `min_depth`
+     * ('country'|'region'|'county'|'city') — with a checkbox and a dropdown on
+     * the settings screen. Nothing ever read them: TagManager is constructed
+     * with (GeoHierarchy, PolylangBridge, PlaceRepository) and GeoHierarchy
+     * with no arguments, so neither can see $settings at all. Switching
+     * continent tags off, or asking for "Country only", changed nothing.
+     * They are removed rather than wired up, on the principle that a control
+     * which does nothing is worse than no control.
+     *
+     * Implementing them later means threading the settings into TagManager and
+     * filtering the chain in attach_from_place_chain()/apply_geo_tags() — the
+     * one place that decides which levels of a chain become tags. Note that
+     * 'county' was never a place level in the first place: GeoHierarchy folds
+     * Nominatim's `county` into `region` (class-geo-hierarchy.php), and
+     * LEVEL_ORDER has only continent/country/region/city.
+     */
     public const DEFAULT_SETTINGS = [
         'user_agent'         => '',
         'cache_days'         => 30,
         'rate_limit_ms'      => 1100,
-        'continent_tags'     => true,
-        'min_depth'          => 'city',
         'region_countries'   => [],
     ];
 

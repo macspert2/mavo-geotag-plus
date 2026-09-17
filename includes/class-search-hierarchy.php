@@ -60,7 +60,15 @@ class SearchHierarchy {
         add_action('wp_enqueue_scripts', [$this, 'enqueue_styles']);
     }
 
+    /**
+     * Search results only — this block has no other home, as the class comment
+     * above says. It used to enqueue on every front-end request.
+     */
     public function enqueue_styles(): void {
+        if (!is_search()) {
+            return;
+        }
+
         wp_register_style('geo-tagger-search-hierarchy', false, [], GEO_TAGGER_VERSION);
         wp_enqueue_style('geo-tagger-search-hierarchy');
         wp_add_inline_style('geo-tagger-search-hierarchy', $this->inline_css());

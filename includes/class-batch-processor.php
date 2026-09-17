@@ -86,10 +86,16 @@ class BatchProcessor {
     }
 
     /**
-     * Deletes the cached breadcrumb HTML/JSON-LD/fingerprint for every post and tag,
-     * so the next save/batch run (posts) or page view (tag archives) regenerates it
-     * from scratch — e.g. after a breadcrumb template/styling change, or a
-     * region-whitelist update.
+     * Deletes the cached breadcrumb HTML/JSON-LD/fingerprint for every post and
+     * tag, so the next view regenerates it — e.g. after an edit to the
+     * breadcrumb markup itself.
+     *
+     * Far less drastic than it used to be. Posts rebuilt only on the next save
+     * or batch run, so clearing the cache removed every post breadcrumb on the
+     * site until each post was touched again; they now rebuild lazily on view,
+     * like tag archives always did. The targeted invalidations (a place edit, a
+     * tag merge, a region-whitelist change) mean this is rarely the right
+     * button anyway.
      */
     public function ajax_clear_breadcrumb_cache(): void {
         check_ajax_referer('geo_tagger_nonce', 'nonce');
@@ -97,21 +103,9 @@ class BatchProcessor {
             wp_send_json_error('Forbidden', 403);
         }
 
-        global $wpdb;
-        $deleted_posts = $wpdb->query($wpdb->prepare(
-            "DELETE FROM {$wpdb->postmeta} WHERE meta_key IN (%s, %s, %s)",
-            GeoBreadcrumb::META_HTML,
-            GeoBreadcrumb::META_JSON,
-            GeoBreadcrumb::META_FINGERPRINT
-        ));
-        $deleted_terms = $wpdb->query($wpdb->prepare(
-            "DELETE FROM {$wpdb->termmeta} WHERE meta_key IN (%s, %s, %s)",
-            GeoBreadcrumb::META_HTML,
-            GeoBreadcrumb::META_JSON,
-            GeoBreadcrumb::META_FINGERPRINT
-        ));
+        $breadcrumb = new GeoBreadcrumb($this->core->get_place_repo());
 
-        wp_send_json_success(['deleted' => (int) $deleted_posts + (int) $deleted_terms]);
+        wp_send_json_success(['deleted' => $breadcrumb->invalidate_all()]);
     }
 
     public function ajax_process_single(): void {

@@ -6,9 +6,14 @@ defined('ABSPATH') || exit;
 
 class GeoBreadcrumb {
 
-    // The travel-finder page, per language. Was a single French constant until
-    // the EN/DE finder pages existed, which sent English and German breadcrumbs
-    // (and their JSON-LD) to the French page.
+    /**
+     * Where the world crumb points, per language, when the page cannot be
+     * resolved — see world_url().
+     *
+     * Was a single French constant until the EN/DE finder pages existed, which
+     * sent English and German breadcrumbs (and their JSON-LD) to the French
+     * page.
+     */
     private const WORLD_URLS    = [
         'fr' => 'https://www.mamanvoyage.com/ou-partir-trouvez-votre-prochain-voyage/',
         'en' => 'https://www.mamanvoyage.com/en/where-to/',
@@ -52,7 +57,18 @@ class GeoBreadcrumb {
         }
     }
 
+    /**
+     * Only where a breadcrumb can actually appear: a singular post or page
+     * (rendered by the theme or the [geo_breadcrumb] shortcode) and a tag
+     * archive (render_term()). This used to run on every front-end request, so
+     * the homepage, search, author and date archives all carried a kilobyte of
+     * CSS for an element they never show.
+     */
     public function enqueue_styles(): void {
+        if (!is_singular() && !is_tag()) {
+            return;
+        }
+
         // Register a virtual (no-src) handle so we can attach inline CSS cleanly.
         wp_register_style('geo-tagger-breadcrumb', false, [], GEO_TAGGER_VERSION);
         wp_enqueue_style('geo-tagger-breadcrumb');
@@ -100,9 +116,20 @@ class GeoBreadcrumb {
     }
 
     /**
-     * Returns the cached breadcrumb <nav> HTML for a post.
-     * Pass 0 (default) to use the current post in the loop.
-     * Reads postmeta as-is — see sync_post_cache() for how/when it's (re)computed.
+     * Returns the cached breadcrumb <nav> HTML for a post, computing it first
+     * if the cache is empty.
+     *
+     * The lazy rebuild is what makes invalidation usable. This used to be a
+     * bare postmeta read, and sync_post_cache() only ever ran from the tagging
+     * pass — so deleting a post's cached breadcrumb did not refresh it, it
+     * removed it until someone re-saved or re-batched that post. That made the
+     * "clear breadcrumb cache" button destructive enough to avoid, which in
+     * turn left renamed places and merged tags showing stale text for as long
+     * as nobody dared press it.
+     *
+     * Tag archives have always worked this way (render_term() → sync_term_cache()).
+     * Posts now match: a cache miss costs one resolution pass, once, and every
+     * later view is the plain meta read it was before.
      */
     public function render(int $post_id = 0): string {
         if (!$post_id) {
@@ -111,7 +138,16 @@ class GeoBreadcrumb {
         if (!$post_id) {
             return '';
         }
+
         $html = get_post_meta($post_id, self::META_HTML, true);
+
+        if ((!is_string($html) || $html === '')
+            && get_post_meta($post_id, self::META_FINGERPRINT, true) !== self::NOT_GEO_SENTINEL
+        ) {
+            $this->sync_post_cache($post_id);
+            $html = get_post_meta($post_id, self::META_HTML, true);
+        }
+
         return is_string($html) ? $html : '';
     }
 
@@ -182,6 +218,18 @@ class GeoBreadcrumb {
      * when its resolved geographic leaf (or language) actually changed since the
      * last cache write. This preserves any manual link edits made directly in
      * postmeta when a batch rerun resolves the post to the same location.
+     *
+     * Called eagerly by the tagging pass, and lazily by render() on a cache
+     * miss. The lazy path is why a post with no geography now records the
+     * NOT_GEO sentinel: without it, every view of every untagged post would
+     * re-run the resolution and find nothing again.
+     *
+     * The sentinel is deliberately not consulted here, only written. Reading it
+     * would make this method refuse to build a breadcrumb for a post that had
+     * none when it was first viewed — which is every post that gets its
+     * location after publication, i.e. the normal case. render() checks it
+     * instead, so the lazy path stops retrying while the tagging path always
+     * recomputes and overwrites it.
      */
     public function sync_post_cache(int $post_id): void {
         $lang = function_exists('pll_get_post_language')
@@ -193,6 +241,7 @@ class GeoBreadcrumb {
 
         $chain = $this->get_cached_chain($post_id, $lang);
         if (empty($chain)) {
+            update_post_meta($post_id, self::META_FINGERPRINT, self::NOT_GEO_SENTINEL);
             return;
         }
 
@@ -298,6 +347,116 @@ class GeoBreadcrumb {
     }
 
     // -------------------------------------------------------------------------
+    // Invalidation
+    // -------------------------------------------------------------------------
+
+    /**
+     * Drops the cached breadcrumbs that a change to $place_id can have
+     * falsified — the place itself and everything beneath it.
+     *
+     * The subtree matters: a breadcrumb names every ancestor, so renaming a
+     * country rewrites the text of every city breadcrumb under it, not just the
+     * country's own.
+     *
+     * This exists because the cache fingerprint is place_id + lang, which is
+     * deliberately insensitive to names and URLs so that a re-tag resolving to
+     * the same location preserves hand-edited links. The cost of that choice is
+     * that renaming a place, or merging its tag away, changes nothing the
+     * fingerprint can see — so the affected entries have to be dropped
+     * explicitly, here, by whoever made the change.
+     *
+     * Dropping is enough: render() and render_term() both rebuild on a miss.
+     *
+     * @return int Meta rows deleted.
+     */
+    public function invalidate_place_subtree(int $place_id): int {
+        $place_ids = $this->place_repo->get_subtree_ids($place_id);
+        if (!$place_ids) {
+            return 0;
+        }
+
+        $term_ids = $this->place_repo->get_term_ids_for_places($place_ids);
+        if (!$term_ids) {
+            return 0;
+        }
+
+        return $this->invalidate_terms($term_ids);
+    }
+
+    /**
+     * Drops every cached breadcrumb on the site.
+     *
+     * For changes no subtree can describe — the region whitelist, which
+     * decides which ancestors are pruned everywhere at once, or an edit to the
+     * markup this class builds.
+     *
+     * @return int Meta rows deleted.
+     */
+    public function invalidate_all(): int {
+        global $wpdb;
+
+        $keys   = [self::META_HTML, self::META_JSON, self::META_FINGERPRINT];
+        $key_ph = implode(',', array_fill(0, count($keys), '%s'));
+
+        $deleted  = (int) $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$wpdb->postmeta} WHERE meta_key IN ($key_ph)",
+            ...$keys
+        ));
+        $deleted += (int) $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$wpdb->termmeta} WHERE meta_key IN ($key_ph)",
+            ...$keys
+        ));
+
+        $this->chain_cache = [];
+
+        return $deleted;
+    }
+
+    /**
+     * Drops the cached breadcrumbs of these tags, and of every post carrying
+     * one of them.
+     *
+     * @param int[] $term_ids
+     * @return int Meta rows deleted.
+     */
+    public function invalidate_terms(array $term_ids): int {
+        $term_ids = array_values(array_unique(array_filter(array_map('intval', $term_ids))));
+        if (!$term_ids) {
+            return 0;
+        }
+
+        global $wpdb;
+
+        $keys = [self::META_HTML, self::META_JSON, self::META_FINGERPRINT];
+        $key_ph  = implode(',', array_fill(0, count($keys), '%s'));
+        $term_ph = implode(',', array_fill(0, count($term_ids), '%d'));
+
+        $deleted = (int) $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$wpdb->termmeta}
+              WHERE meta_key IN ($key_ph) AND term_id IN ($term_ph)",
+            ...array_merge($keys, $term_ids)
+        ));
+
+        // The posts are found through the relationship table rather than with
+        // get_objects_in_term(), so this stays one statement whatever the tag's
+        // post count is.
+        $deleted += (int) $wpdb->query($wpdb->prepare(
+            "DELETE pm FROM {$wpdb->postmeta} pm
+               JOIN {$wpdb->term_relationships} tr ON tr.object_id = pm.post_id
+               JOIN {$wpdb->term_taxonomy} tt
+                       ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                      AND tt.taxonomy = 'post_tag'
+              WHERE pm.meta_key IN ($key_ph)
+                AND tt.term_id IN ($term_ph)",
+            ...array_merge($keys, $term_ids)
+        ));
+
+        $this->chain_cache = [];
+
+        return $deleted;
+    }
+
+    // -------------------------------------------------------------------------
     // Shared resolution pipeline
     // -------------------------------------------------------------------------
 
@@ -326,7 +485,7 @@ class GeoBreadcrumb {
             [
                 'level' => 'world',
                 'name'  => self::WORLD_LABELS[$lang] ?? self::WORLD_LABELS['fr'],
-                'url'   => self::WORLD_URLS[$lang] ?? self::WORLD_URLS['fr'],
+                'url'   => $this->world_url($lang),
             ],
         ];
 
@@ -491,6 +650,34 @@ class GeoBreadcrumb {
     // -------------------------------------------------------------------------
     // Data helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Where the world crumb points: the travel-finder page in this language.
+     *
+     * That page belongs to mavo-travel-finder, which resolves it from a slug
+     * and Polylang and can therefore survive an editor renaming it. Asking the
+     * plugin that owns the page is better than keeping a second copy of its
+     * URLs here — this class held three absolute mamanvoyage.com URLs, which
+     * broke on staging, on any domain change, and on a slug edit.
+     *
+     * The constant remains as the floor, for a site where travel-finder is
+     * inactive: the crumb is then exactly what it always was.
+     *
+     * Note that this URL is baked into the cached breadcrumb HTML, so moving
+     * the finder page still needs the cache clearing — invalidate_all(), which
+     * the settings screen's button calls.
+     */
+    private function world_url(string $lang): string {
+        if (is_callable(['\TVF_Focus', 'full_finder_url'])) {
+            $url = (string) \TVF_Focus::full_finder_url($lang);
+
+            if ($url !== '') {
+                return $url;
+            }
+        }
+
+        return self::WORLD_URLS[$lang] ?? self::WORLD_URLS['fr'];
+    }
 
     /**
      * Resolution itself now lives in PlaceRepository::get_chain_for_post()

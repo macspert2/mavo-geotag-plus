@@ -9,7 +9,36 @@ class PlaceRepository {
     private const LEVEL_ORDER = ['continent' => 1, 'country' => 2, 'region' => 3, 'city' => 4];
     private const ALLOWED_LANGS = ['fr', 'en', 'de'];
 
+    /**
+     * Schema version. Bump whenever install()'s CREATE TABLE changes, so that
+     * maybe_upgrade() re-runs dbDelta on sites that are already installed.
+     *
+     * 2 — term_id_fr/en/de indexes.
+     */
+    public const DB_VERSION = 2;
+
+    private const DB_VERSION_OPTION = 'geo_tagger_db_version';
+
     private ?int $world_id = null;
+
+    /**
+     * Applies schema changes to an install that already has the tables.
+     *
+     * install() only ever ran from register_activation_hook, so a table created
+     * by an earlier version kept that version's shape for ever: the indexes
+     * added in version 2 would have reached new installs only. dbDelta is
+     * idempotent, so the upgrade is simply "run it again" — gated on a stored
+     * version number so it costs one option read per page load and nothing
+     * else.
+     */
+    public static function maybe_upgrade(): void {
+        if ((int) get_option(self::DB_VERSION_OPTION, 0) === self::DB_VERSION) {
+            return;
+        }
+
+        self::install();
+        update_option(self::DB_VERSION_OPTION, self::DB_VERSION, false);
+    }
 
     public static function install(): void {
         global $wpdb;
@@ -17,6 +46,12 @@ class PlaceRepository {
 
         $charset_collate = $wpdb->get_charset_collate();
 
+        // The term_id_* indexes carry more traffic than anything else here.
+        // Inside this plugin they serve get_place_by_term_id(),
+        // get_level_for_term_id(), filter_geo_term_ids() (every post save) and
+        // get_chain_for_post(). Outside it, mavo-for-you joins this table on
+        // term_id_{lang} twice per recommendation request. All of that was a
+        // full scan until these existed.
         dbDelta("CREATE TABLE {$wpdb->prefix}geo_tagger_places (
             id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             parent_id    BIGINT UNSIGNED NULL DEFAULT NULL,
@@ -34,7 +69,10 @@ class PlaceRepository {
             updated_at   DATETIME NOT NULL,
             PRIMARY KEY  (id),
             KEY parent_level (parent_id, level),
-            KEY country_code (country_code)
+            KEY country_code (country_code),
+            KEY term_id_fr (term_id_fr),
+            KEY term_id_en (term_id_en),
+            KEY term_id_de (term_id_de)
         ) $charset_collate;");
 
         dbDelta("CREATE TABLE {$wpdb->prefix}geo_tagger_coord_index (
@@ -175,6 +213,84 @@ class PlaceRepository {
     }
 
     /**
+     * A place and every place beneath it.
+     *
+     * Walked level by level rather than with a recursive CTE: the tree is four
+     * deep (continent → country → region → city), so this is at most four
+     * queries and works on MySQL 5.7 as well as 8. The depth cap is a guard
+     * against a parent cycle, which the Place Editor's level rules should make
+     * impossible but which a hand-edited row could still produce.
+     *
+     * @return int[] $place_id first, then its descendants.
+     */
+    public function get_subtree_ids(int $place_id): array {
+        if ($place_id <= 0) {
+            return [];
+        }
+
+        global $wpdb;
+        $table = "{$wpdb->prefix}geo_tagger_places";
+
+        $all      = [$place_id];
+        $frontier = [$place_id];
+
+        for ($depth = 0; $depth < 5 && $frontier; $depth++) {
+            $placeholders = implode(',', array_fill(0, count($frontier), '%d'));
+
+            $children = $wpdb->get_col(
+                $wpdb->prepare(
+                    "SELECT id FROM {$table} WHERE parent_id IN ($placeholders)",
+                    ...$frontier
+                )
+            );
+
+            $children = array_diff(array_map('intval', $children ?: []), $all);
+            $all      = array_merge($all, $children);
+            $frontier = array_values($children);
+        }
+
+        return array_values(array_unique($all));
+    }
+
+    /**
+     * Every post_tag term id attached to these places, all languages.
+     *
+     * @param int[] $place_ids
+     * @return int[]
+     */
+    public function get_term_ids_for_places(array $place_ids): array {
+        $place_ids = array_values(array_unique(array_filter(array_map('intval', $place_ids))));
+        if (!$place_ids) {
+            return [];
+        }
+
+        global $wpdb;
+
+        $placeholders = implode(',', array_fill(0, count($place_ids), '%d'));
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id_fr, term_id_en, term_id_de
+                   FROM {$wpdb->prefix}geo_tagger_places
+                  WHERE id IN ($placeholders)",
+                ...$place_ids
+            ),
+            ARRAY_A
+        );
+
+        $term_ids = [];
+        foreach ($rows ?: [] as $row) {
+            foreach ($row as $id) {
+                if ((int) $id) {
+                    $term_ids[(int) $id] = true;
+                }
+            }
+        }
+
+        return array_keys($term_ids);
+    }
+
+    /**
      * Narrows a list of post_tag term IDs to the ones this plugin owns —
      * those referenced by any language column of geo_tagger_places.
      *
@@ -196,19 +312,35 @@ class PlaceRepository {
         $placeholders = implode(',', array_fill(0, count($term_ids), '%d'));
         $table        = "{$wpdb->prefix}geo_tagger_places";
 
-        // One pass per language column, each reduced to the ids that matched,
-        // so the result contains term ids rather than place rows.
-        $found = [];
+        // One statement across all three language columns. This ran as three
+        // separate queries, and it is called from pre_post_update — so every
+        // post and page save on the site paid for three round trips where one
+        // does. The rows come back as place rows; the term ids wanted are
+        // whichever of their three columns were actually asked for.
+        $where = [];
+        $args  = [];
         foreach (self::ALLOWED_LANGS as $lang) {
-            $col  = 'term_id_' . $lang;
-            $rows = $wpdb->get_col(
-                $wpdb->prepare(
-                    "SELECT {$col} FROM {$table} WHERE {$col} IN ($placeholders)",
-                    ...$term_ids
-                )
-            );
-            foreach ($rows ?: [] as $id) {
-                $found[(int) $id] = true;
+            $where[] = "term_id_{$lang} IN ($placeholders)";
+            $args    = array_merge($args, $term_ids);
+        }
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id_fr, term_id_en, term_id_de FROM {$table}
+                 WHERE " . implode(' OR ', $where),
+                ...$args
+            ),
+            ARRAY_A
+        );
+
+        $asked = array_flip($term_ids);
+        $found = [];
+        foreach ($rows ?: [] as $row) {
+            foreach ($row as $id) {
+                $id = (int) $id;
+                if ($id && isset($asked[$id])) {
+                    $found[$id] = true;
+                }
             }
         }
 

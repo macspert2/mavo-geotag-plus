@@ -16,10 +16,12 @@ defined('ABSPATH') || exit;
  * start of this plugin. This screen only fixes the geo_tagger_places
  * hierarchy that drives breadcrumbs/related-posts/search-hierarchy.
  *
- * Editing a place doesn't retroactively touch already-cached breadcrumb
- * HTML/JSON-LD (the fingerprint only changes if the leaf place ID itself
- * changes) — use "Clear Breadcrumb Cache" on the main Geo Tagger page
- * afterwards if the edit should show up on already-published content.
+ * Editing a place drops the cached breadcrumbs of that place and everything
+ * beneath it, so the change shows up on already-published content by itself.
+ * It used to leave them alone — the fingerprint is place_id + lang, which a
+ * rename does not change — and the manual "Clear Breadcrumb Cache" button on
+ * the main Geo Tagger page was the only remedy, site-wide. Renamed places
+ * therefore kept their old names on every post indefinitely.
  */
 class PlaceEditor {
 
@@ -266,7 +268,25 @@ class PlaceEditor {
             wp_send_json_error(['message' => 'Database update failed.']);
         }
 
-        wp_send_json_success(['place_id' => $place_id]);
+        // A breadcrumb names every ancestor, so a rename or a reparent here
+        // falsifies the cached HTML of this place *and* of everything under it.
+        // Both the old and the new subtree are dropped: reparenting a city from
+        // one region to another changes the crumbs of the place it left as well
+        // as of the one it joined.
+        $invalidated = 0;
+        $breadcrumb  = new GeoBreadcrumb($this->place_repo);
+
+        $invalidated += $breadcrumb->invalidate_place_subtree($place_id);
+
+        $old_parent = (int) ($current->parent_id ?? 0);
+        if ($old_parent && $old_parent !== $parent_id) {
+            $invalidated += $breadcrumb->invalidate_place_subtree($old_parent);
+        }
+
+        wp_send_json_success([
+            'place_id'    => $place_id,
+            'invalidated' => $invalidated,
+        ]);
     }
 
     // -------------------------------------------------------------------------

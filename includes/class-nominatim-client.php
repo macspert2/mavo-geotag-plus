@@ -81,8 +81,15 @@ class NominatimClient {
     /**
      * Raw connectivity probe — returns ['code' => int, 'body' => string] without caching.
      * Used by the admin test button to surface the exact Nominatim response.
+     *
+     * Spaced and timestamped like a real request even though its result is not
+     * cached: it is one more call to the same endpoint under the same 1 req/s
+     * policy, and pressing "test" immediately before a batch run used to fire
+     * two requests with no gap between them.
      */
     public function probe(float $lat, float $lng): array {
+        $this->rate_limit();
+
         $url = add_query_arg([
             'lat'            => $lat,
             'lon'            => $lng,
@@ -99,6 +106,8 @@ class NominatimClient {
             'user-agent' => $user_agent,
             'headers'    => ['Referer' => home_url()],
         ]);
+
+        set_transient(self::RATE_LIMIT_TRANSIENT, microtime(true), 60);
 
         if (is_wp_error($response)) {
             return ['code' => 0, 'body' => $response->get_error_message()];

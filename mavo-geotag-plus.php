@@ -35,6 +35,7 @@ spl_autoload_register(function (string $class): void {
 
 register_activation_hook(__FILE__, function (): void {
     GeoTagger\PlaceRepository::install();
+    update_option('geo_tagger_db_version', GeoTagger\PlaceRepository::DB_VERSION, false);
 });
 
 // Tagging runs on a single-event cron hook (see Core::schedule_tagging()), so
@@ -51,6 +52,11 @@ add_action('plugins_loaded', function (): void {
         });
         return;
     }
+
+    // Schema changes reach sites that are already installed — activation runs
+    // once, so without this the table keeps the shape it was created with. One
+    // option read when the version already matches.
+    GeoTagger\PlaceRepository::maybe_upgrade();
 
     $core = new GeoTagger\Core();
     $core->init();
