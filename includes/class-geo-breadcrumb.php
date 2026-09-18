@@ -47,6 +47,11 @@ class GeoBreadcrumb {
         add_shortcode('geo_breadcrumb',  [$this, 'shortcode']);
         add_action('wp_enqueue_scripts', [$this, 'enqueue_styles']);
 
+        // Fired by whoever repoints a geo tag at a landing page — the child
+        // theme's tag edit screen today. Listening rather than being called
+        // keeps the dependency one-way and optional in both directions.
+        add_action('mavo_geo_term_url_changed', [$this, 'on_term_url_changed']);
+
         if (defined('WPSEO_VERSION')) {
             // Yoast SEO already emits a BreadcrumbList inside its own @graph.
             // Replace its itemListElement with ours instead of outputting a
@@ -460,6 +465,57 @@ class GeoBreadcrumb {
     // Shared resolution pipeline
     // -------------------------------------------------------------------------
 
+/**
+     * Where a crumb points: the tag archive, unless something offers better.
+     *
+     * Several geo tags have a dedicated landing page — /europe/ rather than
+     * /tag/europe/ — and the breadcrumb should name the page a reader would
+     * rather land on, in the visible link and in the JSON-LD alike.
+     *
+     * Which tags those are is not this plugin's business to know. The child
+     * theme owns that mapping (term meta set on the tag edit screen, also used
+     * for the geo badges), so this asks and takes what it is given. Nothing here
+     * knows the meta key, and with no listener the tag archive is used exactly
+     * as before.
+     *
+     * @param int    $term_id The post_tag whose archive would otherwise be used.
+     * @param string $lang    Polylang slug, since terms are per-language.
+     */
+    private function term_url(int $term_id, string $lang): ?string {
+        $url = get_term_link($term_id, 'post_tag');
+        $url = is_wp_error($url) ? null : (string) $url;
+
+        /**
+         * Filters the URL a geographic breadcrumb crumb points at.
+         *
+         * @param string|null $url     Tag archive URL, or null if it could not be resolved.
+         * @param int         $term_id The post_tag term.
+         * @param string      $lang    Polylang language slug.
+         */
+        $url = apply_filters('mavo_geo_term_url', $url, $term_id, $lang);
+
+        return is_string($url) && $url !== '' ? $url : null;
+    }
+
+    /**
+     * Drops cached breadcrumbs after a crumb's URL has been repointed.
+     *
+     * The fingerprint is place_id + lang, deliberately blind to names and URLs
+     * so that a re-tag resolving to the same location keeps hand-edited links.
+     * The cost, spelled out on invalidate_place_subtree(), is that a change the
+     * fingerprint cannot see has to be dropped explicitly by whoever made it.
+     * Repointing a tag at a landing page is such a change.
+     *
+     * Everything is dropped rather than a subtree, because the crumb appears in
+     * every breadcrumb beneath it: give Europe a landing page and every post in
+     * Europe has a stale URL cached, in its JSON-LD as well as its markup.
+     * Working out that set costs more than rebuilding lazily, and setting a
+     * landing page is a rare, deliberate admin action.
+     */
+    public function on_term_url_changed(): void {
+        $this->invalidate_all();
+    }
+
     /**
      * Converts a place chain into an ordered list of breadcrumb items.
      * Applies the city-count rule (city only if count > 1) and resolves URLs.
@@ -521,12 +577,10 @@ class GeoBreadcrumb {
                 }
             }
 
-            $url = $is_current ? null : get_term_link($term_id, 'post_tag');
-
             $items[] = [
                 'level'   => $place->level,
                 'name'    => $name,
-                'url'     => is_wp_error($url) ? null : $url,
+                'url'     => $is_current ? null : $this->term_url($term_id, $lang),
                 'current' => $is_current,
             ];
         }
